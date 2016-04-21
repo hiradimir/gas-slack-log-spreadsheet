@@ -21,6 +21,8 @@ function StoreLogsDelta() {
 var SlackChannelHistoryLogger = (function () {
     function SlackChannelHistoryLogger() {
         this.memberNames = {};
+        this.cachedSpreadSheet = {};
+        this.cachedSheet = {};
     }
     SlackChannelHistoryLogger.prototype.requestSlackAPI = function (path, params) {
         if (params === void 0) { params = {}; }
@@ -66,7 +68,7 @@ var SlackChannelHistoryLogger = (function () {
         });
         return folder;
     };
-    SlackChannelHistoryLogger.prototype.getSheet = function (ch, d, readonly) {
+    SlackChannelHistoryLogger.prototype.getSpreadSheet = function (ch, d, readonly) {
         if (readonly === void 0) { readonly = false; }
         var dateString;
         if (d instanceof Date) {
@@ -76,28 +78,55 @@ var SlackChannelHistoryLogger = (function () {
             dateString = '' + d;
         }
         var spreadsheet;
-        var sheetByID = {};
         var spreadsheetName = dateString;
-        var folder = this.getLogsFolder();
-        var it = folder.getFilesByName(spreadsheetName);
-        if (it.hasNext()) {
-            var file = it.next();
-            spreadsheet = SpreadsheetApp.openById(file.getId());
+        if (this.cachedSpreadSheet[spreadsheetName]) {
+            spreadsheet = this.cachedSpreadSheet[spreadsheetName];
         }
         else {
-            if (readonly)
-                return null;
-            spreadsheet = SpreadsheetApp.create(spreadsheetName);
-            folder.addFile(DriveApp.getFileById(spreadsheet.getId()));
+            var folder = this.getLogsFolder();
+            var it = folder.getFilesByName(spreadsheetName);
+            if (it.hasNext()) {
+                var file = it.next();
+                spreadsheet = SpreadsheetApp.openById(file.getId());
+            }
+            else {
+                if (readonly)
+                    return null;
+                spreadsheet = SpreadsheetApp.create(spreadsheetName);
+                folder.addFile(DriveApp.getFileById(spreadsheet.getId()));
+            }
         }
-        var sheets = spreadsheet.getSheets();
-        sheets.forEach(function (s) {
-            var name = s.getName();
-            var m = /^(.+) \((.+)\)$/.exec(name); // eg. "general (C123456)"
-            if (!m)
-                return;
-            sheetByID[m[2]] = s;
-        });
+        return spreadsheet;
+    };
+    SlackChannelHistoryLogger.prototype.getSheet = function (ch, d, readonly) {
+        if (readonly === void 0) { readonly = false; }
+        var spreadsheet = this.getSpreadSheet(ch, d, readonly);
+        if (!spreadsheet) {
+            return null;
+        }
+        var dateString;
+        if (d instanceof Date) {
+            dateString = this.formatDate(d);
+        }
+        else {
+            dateString = '' + d;
+        }
+        var sheetByID;
+        if (this.cachedSheet[dateString]) {
+            sheetByID = this.cachedSheet[dateString];
+        }
+        else {
+            sheetByID = {};
+            var sheets = spreadsheet.getSheets();
+            sheets.forEach(function (s) {
+                var name = s.getName();
+                var m = /^(.+) \((.+)\)$/.exec(name); // eg. "general (C123456)"
+                if (!m)
+                    return;
+                sheetByID[m[2]] = s;
+            });
+            this.cachedSheet[dateString] = sheetByID;
+        }
         var sheet = sheetByID[ch.id];
         if (!sheet) {
             if (readonly)
@@ -216,4 +245,4 @@ var SlackChannelHistoryLogger = (function () {
         });
     };
     return SlackChannelHistoryLogger;
-})();
+}());

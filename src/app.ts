@@ -96,6 +96,9 @@ class SlackChannelHistoryLogger {
   memberNames: { [id: string]: string } = {};
   teamName: string;
 
+  cachedSpreadSheet: { [id: string]: GoogleAppsScript.Spreadsheet.Spreadsheet } = {};
+  cachedSheet: { [id: string]: {[id: string]: GoogleAppsScript.Spreadsheet.Sheet} } = {};
+
   constructor() {
   }
 
@@ -146,7 +149,7 @@ class SlackChannelHistoryLogger {
     return folder;
   }
 
-  getSheet(ch: ISlackChannel, d: Date|string, readonly: boolean = false): GoogleAppsScript.Spreadsheet.Sheet {
+  getSpreadSheet(ch: ISlackChannel, d: Date|string, readonly: boolean = false): GoogleAppsScript.Spreadsheet.Spreadsheet {
     let dateString: string;
     if (d instanceof Date) {
       dateString = this.formatDate(d);
@@ -155,28 +158,58 @@ class SlackChannelHistoryLogger {
     }
 
     let spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet;
-    let sheetByID: { [id: string]: GoogleAppsScript.Spreadsheet.Sheet } = {};
 
     let spreadsheetName = dateString;
-    let folder = this.getLogsFolder();
-    let it = folder.getFilesByName(spreadsheetName);
-    if (it.hasNext()) {
-      let file = it.next();
-      spreadsheet = SpreadsheetApp.openById(file.getId());
-    } else {
-      if (readonly) return null;
 
-      spreadsheet = SpreadsheetApp.create(spreadsheetName);
-      folder.addFile(DriveApp.getFileById(spreadsheet.getId()));
+    if (this.cachedSpreadSheet[spreadsheetName] ){
+      spreadsheet = this.cachedSpreadSheet[spreadsheetName];
+    } else {
+      let folder = this.getLogsFolder();
+      let it = folder.getFilesByName(spreadsheetName);
+      if (it.hasNext()) {
+        let file = it.next();
+        spreadsheet = SpreadsheetApp.openById(file.getId());
+      } else {
+        if (readonly) return null;
+
+        spreadsheet = SpreadsheetApp.create(spreadsheetName);
+        folder.addFile(DriveApp.getFileById(spreadsheet.getId()));
+      }
     }
 
-    let sheets = spreadsheet.getSheets();
-    sheets.forEach((s: GoogleAppsScript.Spreadsheet.Sheet) => {
-      let name = s.getName();
-      let m = /^(.+) \((.+)\)$/.exec(name); // eg. "general (C123456)"
-      if (!m) return;
-      sheetByID[m[2]] = s;
-    });
+    return spreadsheet;
+  }
+
+  getSheet(ch: ISlackChannel, d: Date|string, readonly: boolean = false): GoogleAppsScript.Spreadsheet.Sheet {
+    let spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet = this.getSpreadSheet(ch, d, readonly);
+
+    if (!spreadsheet) {
+      return null;
+    }
+
+    let dateString: string;
+    if (d instanceof Date) {
+      dateString = this.formatDate(d);
+    } else {
+      dateString = ''+d;
+    }
+
+    let sheetByID: { [id: string]: GoogleAppsScript.Spreadsheet.Sheet };
+
+    if (this.cachedSheet[dateString]) {
+      sheetByID = this.cachedSheet[dateString];
+    } else {
+      sheetByID = {};
+
+      let sheets = spreadsheet.getSheets();
+      sheets.forEach((s: GoogleAppsScript.Spreadsheet.Sheet) => {
+        let name = s.getName();
+        let m = /^(.+) \((.+)\)$/.exec(name); // eg. "general (C123456)"
+        if (!m) return;
+        sheetByID[m[2]] = s;
+      });
+      this.cachedSheet[dateString] = sheetByID;
+    }
 
     let sheet = sheetByID[ch.id];
     if (!sheet) {
@@ -188,7 +221,6 @@ class SlackChannelHistoryLogger {
     if (sheet.getName() !== sheetName) {
       sheet.setName(sheetName);
     }
-
     return sheet;
   }
 
