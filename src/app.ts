@@ -26,7 +26,7 @@ class SpreadsheetLogger {
     var sh = this.log_sheet_();
     var now = new Date();
     var last_row = sh.getLastRow();
-    sh.insertRowAfter(last_row).getRange(last_row + 1, 1, 1, 3).setValues([[now, level, message]]);
+    sh.insertRowAfter(last_row).getRange(last_row + 1, 1, 1, 3).setValues([[now, level, "`" + message]]);
     return sh;
   }
 
@@ -60,6 +60,81 @@ if (!API_TOKEN) {
 
 const LOG_SHEET_ID = PropertiesService.getScriptProperties().getProperty('log_sheet_id');
 const myLogger: SpreadsheetLogger = new SpreadsheetLogger(LOG_SHEET_ID);
+
+
+class ChannelLogStatus{
+  constructor(public key:string, public timestamp:Date, public status: string) {
+  }
+  toObjectArray(): Object[]  {
+    return [this.key, this.timestamp, this.status]
+  }
+}
+
+class SpreadsheetKeyValueStore {
+
+  constructor(public id: string) {
+    this.init();
+  }
+
+  sh:GoogleAppsScript.Spreadsheet.Sheet;
+
+  keyStatusMap: {[key: string]: {index:number, values?:ChannelLogStatus}} = {};
+
+  private init() {
+    var sh = this.getSheet();
+    var values:Object[][] = sh.getSheetValues(1, 1, sh.getMaxRows() - 1, sh.getMaxColumns());
+    values.forEach((v, i) => {
+      var status = new ChannelLogStatus(<string>v[0], <Date>v[1], <string>v[2]);
+      this.keyStatusMap[status.key] = {index:i + 1, values: status};
+    });
+    return sh;
+  }
+
+  private getSheet() {
+
+    if (this.sh == null) {
+      var sheet_name = 'status';
+      var ss = SpreadsheetApp.openById(this.id);
+      var sh = ss.getSheetByName(sheet_name);
+      if (sh == null) {
+        var sheet_num = ss.getSheets().length;
+        sh = ss.insertSheet(sheet_name, sheet_num);
+        sh.getRange('A1:C1').setValues([['key', 'timestamp', 'value']]).setBackground('#cfe2f3').setFontWeight('bold');
+      }
+      this.sh = sh;
+    }
+    return this.sh;
+  }
+
+  private newRow(key: string): number {
+    var sh = this.getSheet();
+    var last_row = sh.getLastRow();
+    sh.insertRowAfter(last_row);
+    this.keyStatusMap[key] = {index: last_row + 1, values: null};
+    return last_row + 1;
+  }
+
+  setStatus(key: string, status: string) {
+    if(!this.keyStatusMap[key]){
+      this.newRow(key);
+    }
+    var keyInfo = this.keyStatusMap[key];
+    var sh = this.getSheet();
+
+    var now = new Date();
+    keyInfo.values = new ChannelLogStatus(key, now, status);
+    sh.getRange(keyInfo.index, 1, 1, 3).setValues([keyInfo.values.toObjectArray()]).clearFormat();
+  }
+
+  getStatus(key: string): ChannelLogStatus {
+    if(this.keyStatusMap[key]){
+      return this.keyStatusMap[key].values;
+    }
+    return new ChannelLogStatus(key, new Date(1), "");
+  }
+}
+
+var keyValueStore = new SpreadsheetKeyValueStore(LOG_SHEET_ID);
 
 const FOLDER_NAME = 'Slack Logs';
 
@@ -103,6 +178,9 @@ interface ISlackChannel {
   id:      string;
   name:    string;
   created: number;
+  is_archived: boolean;
+  is_channel: boolean;
+  is_general: boolean;
 
   // ...and more fields
 }
@@ -150,6 +228,9 @@ interface ISpreadsheetInfo {
   sheets: { [ id: string ]: GoogleAppsScript.Spreadsheet.Sheet; };
 };
 
+// 4分をリミットとする
+const TRIGGER_LIMIT = 4 * (60 * 1000);
+
 class SlackChannelHistoryLogger {
   memberNames: { [id: string]: string } = {};
   teamName: string;
@@ -176,11 +257,14 @@ class SlackChannelHistoryLogger {
       throw `GET ${path}: ${data.error}`;
     }
 
-    myLogger.info(`==< GOT ${JSON.stringify(data)}`);
+    myLogger.info(`<== GOT`);
     return data;
   }
 
   run() {
+    //時刻格納用の変数
+    var starttime = +new Date();
+
     let usersResp = <ISlackUsersListResponse>this.requestSlackAPI('users.list');
     usersResp.members.forEach((member) => {
       this.memberNames[member.id] = member.name;
@@ -192,6 +276,12 @@ class SlackChannelHistoryLogger {
     let channelsResp = <ISlackChannelsListResponse>this.requestSlackAPI('channels.list');
     for (let ch of channelsResp.channels) {
       this.importChannelHistoryDelta(ch);
+      var endtime = +new Date();
+      if ( endtime - starttime > TRIGGER_LIMIT) {
+        myLogger.info(`TERMINATE by limit time ${endtime - starttime} > ${TRIGGER_LIMIT}`);
+        break;
+      }
+
     }
   }
 
@@ -240,6 +330,11 @@ class SlackChannelHistoryLogger {
     return spreadsheet;
   }
 
+  sheetName(ch: ISlackChannel): string {
+    let sheetName = `${ch.name} (${ch.id})`;
+    return sheetName;
+  }
+
   getSheet(ch: ISlackChannel, d: Date|string, readonly: boolean = false): GoogleAppsScript.Spreadsheet.Sheet {
     let spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet = this.getSpreadSheet(ch, d, readonly);
 
@@ -275,17 +370,27 @@ class SlackChannelHistoryLogger {
     if (!sheet) {
       if (readonly) return null;
       sheet = spreadsheet.insertSheet();
+      sheet.setColumnWidth(COL_LOG_TEXT, 480);
     }
 
-    let sheetName = `${ch.name} (${ch.id})`;
+    let sheetName = this.sheetName(ch);
     if (sheet.getName() !== sheetName) {
       sheet.setName(sheetName);
     }
+
     return sheet;
   }
 
   importChannelHistoryDelta(ch: ISlackChannel) {
     myLogger.info(`importChannelHistoryDelta ${ch.name} (${ch.id})`);
+    let sheetName = this.sheetName(ch);
+    var prevStatus = keyValueStore.getStatus(sheetName);
+
+    if (prevStatus.status == "ARCHIVED") {
+      return;
+    }
+
+    keyValueStore.setStatus(sheetName, "START");
 
     let now = new Date();
     let oldest = '1'; // oldest=0 does not work
@@ -349,6 +454,12 @@ class SlackChannelHistoryLogger {
         range.setValues(rows);
       }
     }
+    if (ch.is_archived) {
+      keyValueStore.setStatus(sheetName, "ARCHIVED");
+    } else {
+      keyValueStore.setStatus(sheetName, "END");
+    }
+
   }
 
   formatDate(dt: Date): string {
