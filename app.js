@@ -1,8 +1,54 @@
+var SpreadsheetLogger = (function () {
+    function SpreadsheetLogger(id) {
+        this.id = id;
+    }
+    SpreadsheetLogger.prototype.log_sheet_ = function () {
+        var sheet_name = 'log';
+        // var ss = SpreadsheetApp.getActiveSpreadsheet();
+        var ss = SpreadsheetApp.openById(this.id);
+        if (this.sh == null) {
+            var sh = ss.getSheetByName(sheet_name);
+            if (sh == null) {
+                var sheet_num = ss.getSheets().length;
+                sh = ss.insertSheet(sheet_name, sheet_num);
+                sh.getRange('A1:C1').setValues([['timestamp', 'level', 'message']]).setBackground('#cfe2f3').setFontWeight('bold');
+                sh.getRange('A2:C2').setValues([[new Date(), 'info', sheet_name + ' has been created.']]).clearFormat();
+            }
+            this.sh = sh;
+        }
+        return this.sh;
+    };
+    SpreadsheetLogger.prototype.log_ = function (level, message) {
+        var sh = this.log_sheet_();
+        var now = new Date();
+        var last_row = sh.getLastRow();
+        sh.insertRowAfter(last_row).getRange(last_row + 1, 1, 1, 3).setValues([[now, level, message]]);
+        return sh;
+    };
+    SpreadsheetLogger.prototype.debug = function (message) {
+        this.log_('debug', message);
+    };
+    SpreadsheetLogger.prototype.info = function (message) {
+        this.log_('info', message);
+    };
+    SpreadsheetLogger.prototype.warn = function (message) {
+        this.log_('warn', message);
+    };
+    SpreadsheetLogger.prototype.error = function (message) {
+        this.log_('error', message);
+    };
+    SpreadsheetLogger.prototype.fatal = function (message) {
+        this.log_('fatal', message);
+    };
+    return SpreadsheetLogger;
+}());
 // Configuration: Obtain Slack web API token at https://api.slack.com/web
 var API_TOKEN = PropertiesService.getScriptProperties().getProperty('slack_api_token');
 if (!API_TOKEN) {
     throw 'You should set "slack_api_token" property from [File] > [Project properties] > [Script properties]';
 }
+var LOG_SHEET_ID = PropertiesService.getScriptProperties().getProperty('log_sheet_id');
+var myLogger = new SpreadsheetLogger(LOG_SHEET_ID);
 var FOLDER_NAME = 'Slack Logs';
 /**** Do not edit below unless you know what you are doing ****/
 var COL_LOG_TIMESTAMP = 1;
@@ -15,7 +61,9 @@ var MAX_HISTORY_PAGINATION = 10;
 var HISTORY_COUNT_PER_PAGE = 1000;
 function StoreLogsDelta() {
     var logger = new SlackChannelHistoryLogger();
+    myLogger.info("Start logger.run");
     logger.run();
+    myLogger.info("End   logger.run");
 }
 ;
 var SlackChannelHistoryLogger = (function () {
@@ -32,12 +80,13 @@ var SlackChannelHistoryLogger = (function () {
             qparams.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
         }
         url += qparams.join('&');
-        Logger.log("==> GET " + url);
+        myLogger.info("==> GET " + url);
         var resp = UrlFetchApp.fetch(url);
         var data = JSON.parse(resp.getContentText());
         if (data.error) {
             throw "GET " + path + ": " + data.error;
         }
+        myLogger.info("==< GOT " + JSON.stringify(data));
         return data;
     };
     SlackChannelHistoryLogger.prototype.run = function () {
@@ -141,7 +190,7 @@ var SlackChannelHistoryLogger = (function () {
     };
     SlackChannelHistoryLogger.prototype.importChannelHistoryDelta = function (ch) {
         var _this = this;
-        Logger.log("importChannelHistoryDelta " + ch.name + " (" + ch.id + ")");
+        myLogger.info("importChannelHistoryDelta " + ch.name + " (" + ch.id + ")");
         var now = new Date();
         var oldest = '1'; // oldest=0 does not work
         var existingSheet = this.getSheet(ch, now, true);
@@ -157,7 +206,7 @@ var SlackChannelHistoryLogger = (function () {
                 oldest = data.ts;
             }
             catch (e) {
-                Logger.log("while trying to parse the latest history item from existing sheet: " + e);
+                myLogger.info("while trying to parse the latest history item from existing sheet: " + e);
             }
         }
         var messages = this.loadMessagesBulk(ch, { oldest: oldest });
@@ -226,6 +275,7 @@ var SlackChannelHistoryLogger = (function () {
         var resp = loadSince();
         var page = 1;
         while (resp.has_more && page <= MAX_HISTORY_PAGINATION) {
+            myLogger.info("channels.history.pagination " + ch.name + " (" + ch.id + ") " + page);
             resp = loadSince(resp.messages[0].ts);
             page++;
         }

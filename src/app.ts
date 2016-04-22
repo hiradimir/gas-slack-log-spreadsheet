@@ -1,9 +1,65 @@
+class SpreadsheetLogger {
+  constructor(public id: string) {
+  }
+
+  sh:GoogleAppsScript.Spreadsheet.Sheet;
+
+  log_sheet_() {
+    var sheet_name = 'log';
+    // var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = SpreadsheetApp.openById(this.id);
+
+    if (this.sh == null) {
+      var sh = ss.getSheetByName(sheet_name);
+      if (sh == null) {
+        var sheet_num = ss.getSheets().length;
+        sh = ss.insertSheet(sheet_name, sheet_num);
+        sh.getRange('A1:C1').setValues([['timestamp', 'level', 'message']]).setBackground('#cfe2f3').setFontWeight('bold');
+        sh.getRange('A2:C2').setValues([[new Date(), 'info', sheet_name + ' has been created.']]).clearFormat();
+      }
+      this.sh = sh;
+    }
+    return this.sh;
+  }
+
+  log_(level: string, message: string) {
+    var sh = this.log_sheet_();
+    var now = new Date();
+    var last_row = sh.getLastRow();
+    sh.insertRowAfter(last_row).getRange(last_row + 1, 1, 1, 3).setValues([[now, level, message]]);
+    return sh;
+  }
+
+  debug(message: string) {
+    this.log_('debug', message);
+  }
+
+  info(message: string) {
+    this.log_('info', message);
+  }
+
+  warn(message: string) {
+    this.log_('warn', message);
+  }
+
+  error(message: string) {
+    this.log_('error', message);
+  }
+
+  fatal(message: string) {
+    this.log_('fatal', message);
+  }
+
+}
 // Configuration: Obtain Slack web API token at https://api.slack.com/web
 const API_TOKEN = PropertiesService.getScriptProperties().getProperty('slack_api_token');
 
 if (!API_TOKEN) {
   throw 'You should set "slack_api_token" property from [File] > [Project properties] > [Script properties]';
 }
+
+const LOG_SHEET_ID = PropertiesService.getScriptProperties().getProperty('log_sheet_id');
+const myLogger: SpreadsheetLogger = new SpreadsheetLogger(LOG_SHEET_ID);
 
 const FOLDER_NAME = 'Slack Logs';
 
@@ -84,7 +140,9 @@ interface ISlackTeamInfoResponse extends ISlackResponse {
 
 function StoreLogsDelta() {
   let logger = new SlackChannelHistoryLogger();
+  myLogger.info("Start logger.run");
   logger.run();
+  myLogger.info("End   logger.run");
 }
 
 interface ISpreadsheetInfo {
@@ -110,13 +168,15 @@ class SlackChannelHistoryLogger {
     }
     url += qparams.join('&');
 
-    Logger.log(`==> GET ${url}`)
+    myLogger.info(`==> GET ${url}`);
 
     let resp = UrlFetchApp.fetch(url);
     let data = <ISlackResponse>JSON.parse(resp.getContentText());
     if (data.error) {
       throw `GET ${path}: ${data.error}`;
     }
+
+    myLogger.info(`==< GOT ${JSON.stringify(data)}`);
     return data;
   }
 
@@ -225,7 +285,7 @@ class SlackChannelHistoryLogger {
   }
 
   importChannelHistoryDelta(ch: ISlackChannel) {
-    Logger.log(`importChannelHistoryDelta ${ch.name} (${ch.id})`);
+    myLogger.info(`importChannelHistoryDelta ${ch.name} (${ch.id})`);
 
     let now = new Date();
     let oldest = '1'; // oldest=0 does not work
@@ -242,7 +302,7 @@ class SlackChannelHistoryLogger {
         let data = <ISlackMessage>JSON.parse(<string>existingSheet.getRange(lastRow, COL_LOG_RAW_JSON).getValue());
         oldest = data.ts;
       } catch (e) {
-        Logger.log(`while trying to parse the latest history item from existing sheet: ${e}`)
+        myLogger.info(`while trying to parse the latest history item from existing sheet: ${e}`)
       }
     }
 
@@ -317,6 +377,7 @@ class SlackChannelHistoryLogger {
     let resp = loadSince();
     let page = 1;
     while (resp.has_more && page <= MAX_HISTORY_PAGINATION) {
+      myLogger.info(`channels.history.pagination ${ch.name} (${ch.id}) ${page}`);
       resp = loadSince(resp.messages[0].ts);
       page++;
     }
