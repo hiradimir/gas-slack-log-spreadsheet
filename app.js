@@ -22,7 +22,7 @@ var SpreadsheetLogger = (function () {
         var sh = this.log_sheet_();
         var now = new Date();
         var last_row = sh.getLastRow();
-        sh.insertRowAfter(last_row).getRange(last_row + 1, 1, 1, 3).setValues([[now, level, "`" + message]]);
+        sh.insertRowAfter(last_row).getRange(last_row + 1, 1, 1, 3).setValues([[now, level, "'" + message]]);
         return sh;
     };
     SpreadsheetLogger.prototype.debug = function (message) {
@@ -169,6 +169,21 @@ var SlackChannelHistoryLogger = (function () {
         var teamInfoResp = this.requestSlackAPI('team.info');
         this.teamName = teamInfoResp.team.name;
         var channelsResp = this.requestSlackAPI('channels.list');
+        channelsResp.channels.sort(function (ch1, ch2) {
+            var sheetName1 = _this.sheetName(ch1);
+            var sheetName2 = _this.sheetName(ch2);
+            var status1 = keyValueStore.getStatus(sheetName1);
+            var status2 = keyValueStore.getStatus(sheetName2);
+            var time1 = status1.timestamp.getTime();
+            if (status1.status != "END") {
+                time1 = 0;
+            }
+            var time2 = status2.timestamp.getTime();
+            if (status2.status != "END") {
+                time2 = 0;
+            }
+            return time1 - time2;
+        });
         for (var _i = 0, _a = channelsResp.channels; _i < _a.length; _i++) {
             var ch = _a[_i];
             this.importChannelHistoryDelta(ch);

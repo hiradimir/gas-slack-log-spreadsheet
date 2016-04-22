@@ -26,7 +26,7 @@ class SpreadsheetLogger {
     var sh = this.log_sheet_();
     var now = new Date();
     var last_row = sh.getLastRow();
-    sh.insertRowAfter(last_row).getRange(last_row + 1, 1, 1, 3).setValues([[now, level, "`" + message]]);
+    sh.insertRowAfter(last_row).getRange(last_row + 1, 1, 1, 3).setValues([[now, level, "'" + message]]);
     return sh;
   }
 
@@ -274,6 +274,24 @@ class SlackChannelHistoryLogger {
     this.teamName = teamInfoResp.team.name;
 
     let channelsResp = <ISlackChannelsListResponse>this.requestSlackAPI('channels.list');
+    channelsResp.channels.sort((ch1, ch2)=>{
+      var sheetName1 = this.sheetName(ch1);
+      var sheetName2 = this.sheetName(ch2);
+      var status1 = keyValueStore.getStatus(sheetName1);
+      var status2 = keyValueStore.getStatus(sheetName2);
+
+      var time1 = status1.timestamp.getTime();
+      if (status1.status != "END") {
+        time1 = 0;
+      }
+      var time2 = status2.timestamp.getTime();
+      if (status2.status != "END") {
+        time2 = 0;
+      }
+
+      return time1 - time2;
+    });
+
     for (let ch of channelsResp.channels) {
       this.importChannelHistoryDelta(ch);
       var endtime = +new Date();
