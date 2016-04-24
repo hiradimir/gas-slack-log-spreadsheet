@@ -1,3 +1,27 @@
+/**** Do not edit below unless you know what you are doing ****/
+var COL_LOG_TIMESTAMP = 1;
+var COL_LOG_USER = 2;
+var COL_LOG_TEXT = 3;
+var COL_LOG_RAW_JSON = 4;
+var COL_MAX = COL_LOG_RAW_JSON;
+// Slack offers 10,000 history logs for free plan teams
+var MAX_HISTORY_PAGINATION = 10;
+var HISTORY_COUNT_PER_PAGE = 1000;
+// 4分をリミットとする
+var TRIGGER_LIMIT = 4 * (60 * 1000);
+// Configuration: Obtain Slack web API token at https://api.slack.com/web
+var API_TOKEN = PropertiesService.getScriptProperties().getProperty('slack_api_token');
+if (!API_TOKEN) {
+    throw 'You should set "slack_api_token" property from [File] > [Project properties] > [Script properties]';
+}
+var APP_WORKSHEET_ID = PropertiesService.getScriptProperties().getProperty('app_worksheet_id');
+if (!APP_WORKSHEET_ID) {
+    throw 'You should set "app_worksheet_id" property from [File] > [Project properties] > [Script properties]';
+}
+var LOG_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('log_folder_id');
+if (!LOG_FOLDER_ID) {
+    throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
+}
 var SpreadsheetLogger = (function () {
     function SpreadsheetLogger(id) {
         this.id = id;
@@ -42,13 +66,7 @@ var SpreadsheetLogger = (function () {
     };
     return SpreadsheetLogger;
 }());
-// Configuration: Obtain Slack web API token at https://api.slack.com/web
-var API_TOKEN = PropertiesService.getScriptProperties().getProperty('slack_api_token');
-if (!API_TOKEN) {
-    throw 'You should set "slack_api_token" property from [File] > [Project properties] > [Script properties]';
-}
-var LOG_SHEET_ID = PropertiesService.getScriptProperties().getProperty('log_sheet_id');
-var myLogger = new SpreadsheetLogger(LOG_SHEET_ID);
+var myLogger = new SpreadsheetLogger(APP_WORKSHEET_ID);
 var ChannelLogStatus = (function () {
     function ChannelLogStatus(key, timestamp, status) {
         this.key = key;
@@ -115,17 +133,7 @@ var SpreadsheetKeyValueStore = (function () {
     };
     return SpreadsheetKeyValueStore;
 }());
-var keyValueStore = new SpreadsheetKeyValueStore(LOG_SHEET_ID);
-var FOLDER_NAME = 'Slack Logs';
-/**** Do not edit below unless you know what you are doing ****/
-var COL_LOG_TIMESTAMP = 1;
-var COL_LOG_USER = 2;
-var COL_LOG_TEXT = 3;
-var COL_LOG_RAW_JSON = 4;
-var COL_MAX = COL_LOG_RAW_JSON;
-// Slack offers 10,000 history logs for free plan teams
-var MAX_HISTORY_PAGINATION = 10;
-var HISTORY_COUNT_PER_PAGE = 1000;
+var keyValueStore = new SpreadsheetKeyValueStore(APP_WORKSHEET_ID);
 function StoreLogsDelta() {
     var logger = new SlackChannelHistoryLogger();
     myLogger.info("Start logger.run");
@@ -133,8 +141,6 @@ function StoreLogsDelta() {
     myLogger.info("End   logger.run");
 }
 ;
-// 4分をリミットとする
-var TRIGGER_LIMIT = 4 * (60 * 1000);
 var SlackChannelHistoryLogger = (function () {
     function SlackChannelHistoryLogger() {
         this.memberNames = {};
@@ -195,18 +201,14 @@ var SlackChannelHistoryLogger = (function () {
         }
     };
     SlackChannelHistoryLogger.prototype.getLogsFolder = function () {
-        var folder = DriveApp.getRootFolder();
-        var path = [FOLDER_NAME, this.teamName];
-        path.forEach(function (name) {
-            var it = folder.getFoldersByName(name);
-            if (it.hasNext()) {
-                folder = it.next();
+        if (!this.cachedFolder) {
+            var folder = DriveApp.getFolderById(LOG_FOLDER_ID);
+            if (!folder) {
+                throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
             }
-            else {
-                folder = folder.createFolder(name);
-            }
-        });
-        return folder;
+            this.cachedFolder = folder;
+        }
+        return this.cachedFolder;
     };
     SlackChannelHistoryLogger.prototype.getSpreadSheet = function (ch, d, readonly) {
         if (readonly === void 0) { readonly = false; }

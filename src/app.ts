@@ -1,8 +1,36 @@
+/**** Do not edit below unless you know what you are doing ****/
+
+const COL_LOG_TIMESTAMP = 1;
+const COL_LOG_USER = 2;
+const COL_LOG_TEXT = 3;
+const COL_LOG_RAW_JSON = 4;
+const COL_MAX = COL_LOG_RAW_JSON;
+
+// Slack offers 10,000 history logs for free plan teams
+const MAX_HISTORY_PAGINATION = 10;
+const HISTORY_COUNT_PER_PAGE = 1000;
+// 4分をリミットとする
+const TRIGGER_LIMIT = 4 * (60 * 1000);
+
+// Configuration: Obtain Slack web API token at https://api.slack.com/web
+const API_TOKEN = PropertiesService.getScriptProperties().getProperty('slack_api_token');
+if (!API_TOKEN) {
+  throw 'You should set "slack_api_token" property from [File] > [Project properties] > [Script properties]';
+}
+const APP_WORKSHEET_ID = PropertiesService.getScriptProperties().getProperty('app_worksheet_id');
+if (!APP_WORKSHEET_ID) {
+  throw 'You should set "app_worksheet_id" property from [File] > [Project properties] > [Script properties]';
+}
+const LOG_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('log_folder_id');
+if (!LOG_FOLDER_ID) {
+  throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
+}
+
 class SpreadsheetLogger {
   constructor(public id: string) {
   }
 
-  sh:GoogleAppsScript.Spreadsheet.Sheet;
+  sh: GoogleAppsScript.Spreadsheet.Sheet;
 
   log_sheet_() {
     var sheet_name = 'log';
@@ -51,21 +79,14 @@ class SpreadsheetLogger {
   }
 
 }
-// Configuration: Obtain Slack web API token at https://api.slack.com/web
-const API_TOKEN = PropertiesService.getScriptProperties().getProperty('slack_api_token');
 
-if (!API_TOKEN) {
-  throw 'You should set "slack_api_token" property from [File] > [Project properties] > [Script properties]';
-}
+const myLogger: SpreadsheetLogger = new SpreadsheetLogger(APP_WORKSHEET_ID);
 
-const LOG_SHEET_ID = PropertiesService.getScriptProperties().getProperty('log_sheet_id');
-const myLogger: SpreadsheetLogger = new SpreadsheetLogger(LOG_SHEET_ID);
-
-
-class ChannelLogStatus{
-  constructor(public key:string, public timestamp:Date, public status: string) {
+class ChannelLogStatus {
+  constructor(public key: string, public timestamp: Date, public status: string) {
   }
-  toObjectArray(): Object[]  {
+
+  toObjectArray(): Object[] {
     return [this.key, this.timestamp, this.status]
   }
 }
@@ -76,16 +97,16 @@ class SpreadsheetKeyValueStore {
     this.init();
   }
 
-  sh:GoogleAppsScript.Spreadsheet.Sheet;
+  sh: GoogleAppsScript.Spreadsheet.Sheet;
 
-  keyStatusMap: {[key: string]: {index:number, values?:ChannelLogStatus}} = {};
+  keyStatusMap: {[key: string]: {index: number, values?: ChannelLogStatus}} = {};
 
   private init() {
     var sh = this.getSheet();
-    var values:Object[][] = sh.getSheetValues(1, 1, sh.getMaxRows() - 1, sh.getMaxColumns());
+    var values: Object[][] = sh.getSheetValues(1, 1, sh.getMaxRows() - 1, sh.getMaxColumns());
     values.forEach((v, i) => {
       var status = new ChannelLogStatus(<string>v[0], <Date>v[1], <string>v[2]);
-      this.keyStatusMap[status.key] = {index:i + 1, values: status};
+      this.keyStatusMap[status.key] = {index: i + 1, values: status};
     });
     return sh;
   }
@@ -115,7 +136,7 @@ class SpreadsheetKeyValueStore {
   }
 
   setStatus(key: string, status: string) {
-    if(!this.keyStatusMap[key]){
+    if (!this.keyStatusMap[key]) {
       this.newRow(key);
     }
     var keyInfo = this.keyStatusMap[key];
@@ -127,32 +148,19 @@ class SpreadsheetKeyValueStore {
   }
 
   getStatus(key: string): ChannelLogStatus {
-    if(this.keyStatusMap[key]){
+    if (this.keyStatusMap[key]) {
       return this.keyStatusMap[key].values;
     }
     return new ChannelLogStatus(key, new Date(1), "");
   }
 }
 
-var keyValueStore = new SpreadsheetKeyValueStore(LOG_SHEET_ID);
+const keyValueStore = new SpreadsheetKeyValueStore(APP_WORKSHEET_ID);
 
-const FOLDER_NAME = 'Slack Logs';
-
-/**** Do not edit below unless you know what you are doing ****/
-
-const COL_LOG_TIMESTAMP = 1;
-const COL_LOG_USER      = 2;
-const COL_LOG_TEXT      = 3;
-const COL_LOG_RAW_JSON  = 4;
-const COL_MAX           = COL_LOG_RAW_JSON;
-
-// Slack offers 10,000 history logs for free plan teams
-const MAX_HISTORY_PAGINATION = 10;
-const HISTORY_COUNT_PER_PAGE = 1000;
 
 interface ISlackResponse {
-  ok:       boolean;
-  error?:   string;
+  ok: boolean;
+  error?: string;
 }
 
 // https://api.slack.com/methods/channels.list
@@ -175,8 +183,8 @@ interface ISlackUsersListResponse extends ISlackResponse {
 
 // https://api.slack.com/types/channel
 interface ISlackChannel {
-  id:      string;
-  name:    string;
+  id: string;
+  name: string;
   created: number;
   is_archived: boolean;
   is_channel: boolean;
@@ -187,10 +195,10 @@ interface ISlackChannel {
 
 // https://api.slack.com/events/message
 interface ISlackMessage {
-  type:   string;
-  ts:     string;
-  user:   string;
-  text:   string;
+  type: string;
+  ts: string;
+  user: string;
+  text: string;
 
   // https://api.slack.com/events/message/bot_message
   username?: string;
@@ -200,7 +208,7 @@ interface ISlackMessage {
 
 // https://api.slack.com/types/user
 interface ISlackUser {
-  id:   string;
+  id: string;
   name: string;
 
   // ...and more fields
@@ -209,8 +217,8 @@ interface ISlackUser {
 // https://api.slack.com/methods/team.info
 interface ISlackTeamInfoResponse extends ISlackResponse {
   team: {
-    id:     string;
-    name:   string;
+    id: string;
+    name: string;
     domain: string;
     // ...and more fields
   };
@@ -226,10 +234,9 @@ function StoreLogsDelta() {
 interface ISpreadsheetInfo {
   spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet;
   sheets: { [ id: string ]: GoogleAppsScript.Spreadsheet.Sheet; };
-};
+}
+;
 
-// 4分をリミットとする
-const TRIGGER_LIMIT = 4 * (60 * 1000);
 
 class SlackChannelHistoryLogger {
   memberNames: { [id: string]: string } = {};
@@ -243,7 +250,7 @@ class SlackChannelHistoryLogger {
 
   requestSlackAPI(path: string, params: { [key: string]: any } = {}): ISlackResponse {
     let url = `https://slack.com/api/${path}?`;
-    let qparams = [ `token=${encodeURIComponent(API_TOKEN)}` ];
+    let qparams = [`token=${encodeURIComponent(API_TOKEN)}`];
     for (let k in params) {
       qparams.push(`${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`);
     }
@@ -274,7 +281,7 @@ class SlackChannelHistoryLogger {
     this.teamName = teamInfoResp.team.name;
 
     let channelsResp = <ISlackChannelsListResponse>this.requestSlackAPI('channels.list');
-    channelsResp.channels.sort((ch1, ch2)=>{
+    channelsResp.channels.sort((ch1, ch2)=> {
       var sheetName1 = this.sheetName(ch1);
       var sheetName2 = this.sheetName(ch2);
       var status1 = keyValueStore.getStatus(sheetName1);
@@ -295,7 +302,7 @@ class SlackChannelHistoryLogger {
     for (let ch of channelsResp.channels) {
       this.importChannelHistoryDelta(ch);
       var endtime = +new Date();
-      if ( endtime - starttime > TRIGGER_LIMIT) {
+      if (endtime - starttime > TRIGGER_LIMIT) {
         myLogger.info(`TERMINATE by limit time ${endtime - starttime} > ${TRIGGER_LIMIT}`);
         break;
       }
@@ -303,18 +310,19 @@ class SlackChannelHistoryLogger {
     }
   }
 
+  cachedFolder: GoogleAppsScript.Drive.Folder;
+
   getLogsFolder(): GoogleAppsScript.Drive.Folder {
-    let folder = DriveApp.getRootFolder();
-    let path = [ FOLDER_NAME, this.teamName ];
-    path.forEach((name) => {
-      let it = folder.getFoldersByName(name);
-      if (it.hasNext()) {
-        folder = it.next();
-      } else {
-        folder = folder.createFolder(name);
+
+    if (!this.cachedFolder) {
+      let folder = DriveApp.getFolderById(LOG_FOLDER_ID);
+      if (!folder) {
+        throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
       }
-    });
-    return folder;
+      this.cachedFolder = folder;
+
+    }
+    return this.cachedFolder;
   }
 
   getSpreadSheet(ch: ISlackChannel, d: Date|string, readonly: boolean = false): GoogleAppsScript.Spreadsheet.Spreadsheet {
@@ -322,14 +330,14 @@ class SlackChannelHistoryLogger {
     if (d instanceof Date) {
       dateString = this.formatDate(d);
     } else {
-      dateString = ''+d;
+      dateString = '' + d;
     }
 
     let spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet;
 
     let spreadsheetName = dateString;
 
-    if (this.cachedSpreadSheet[spreadsheetName] ){
+    if (this.cachedSpreadSheet[spreadsheetName]) {
       spreadsheet = this.cachedSpreadSheet[spreadsheetName];
     } else {
       let folder = this.getLogsFolder();
@@ -364,7 +372,7 @@ class SlackChannelHistoryLogger {
     if (d instanceof Date) {
       dateString = this.formatDate(d);
     } else {
-      dateString = ''+d;
+      dateString = '' + d;
     }
 
     let sheetByID: { [id: string]: GoogleAppsScript.Spreadsheet.Sheet };
@@ -429,7 +437,7 @@ class SlackChannelHistoryLogger {
       }
     }
 
-    let messages = this.loadMessagesBulk(ch, { oldest: oldest });
+    let messages = this.loadMessagesBulk(ch, {oldest: oldest});
     let dateStringToMessages: { [dateString: string]: ISlackMessage[] } = {};
 
     messages.forEach((msg) => {
@@ -468,7 +476,7 @@ class SlackChannelHistoryLogger {
       });
       if (rows.length > 0) {
         let range = sheet.insertRowsAfter(lastRow || 1, rows.length)
-                         .getRange(lastRow+1, 1, rows.length, COL_MAX);
+          .getRange(lastRow + 1, 1, rows.length, COL_MAX);
         range.setValues(rows);
       }
     }
@@ -491,7 +499,7 @@ class SlackChannelHistoryLogger {
     // If the result's "has_more" is true, the channel has more older history.
     // In this case, use the result's "latest" value to the channel.history API parameters
     // to obtain the older page, and so on.
-    options['count']   = HISTORY_COUNT_PER_PAGE;
+    options['count'] = HISTORY_COUNT_PER_PAGE;
     options['channel'] = ch.id;
     let loadSince = (oldest?: string) => {
       if (oldest) {
