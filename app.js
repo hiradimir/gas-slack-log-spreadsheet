@@ -187,8 +187,6 @@ var SlackChannelHistoryLogger = (function () {
         usersResp.members.forEach(function (member) {
             _this.memberNames[member.id] = member.name;
         });
-        var teamInfoResp = this.requestSlackAPI('team.info');
-        this.teamName = teamInfoResp.team.name;
         var channelsResp = this.requestSlackAPI('channels.list');
         var channelFetchTime = function (ch) {
             var sheetName = _this.sheetName(ch);

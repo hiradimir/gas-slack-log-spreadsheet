@@ -260,7 +260,6 @@ interface ISpreadsheetInfo {
 
 class SlackChannelHistoryLogger {
   memberNames: { [id: string]: string } = {};
-  teamName: string;
 
   cachedSpreadSheet: { [id: string]: GoogleAppsScript.Spreadsheet.Spreadsheet } = {};
   cachedSheet: { [id: string]: {[id: string]: GoogleAppsScript.Spreadsheet.Sheet} } = {};
@@ -296,9 +295,6 @@ class SlackChannelHistoryLogger {
     usersResp.members.forEach((member) => {
       this.memberNames[member.id] = member.name;
     });
-
-    let teamInfoResp = <ISlackTeamInfoResponse>this.requestSlackAPI('team.info');
-    this.teamName = teamInfoResp.team.name;
 
     let channelsResp = <ISlackChannelsListResponse>this.requestSlackAPI('channels.list');
 
