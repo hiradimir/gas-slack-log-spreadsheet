@@ -170,7 +170,7 @@ var SlackChannelHistoryLogger = (function () {
             qparams.push(encodeURIComponent(k) + "=" + encodeURIComponent(params[k]));
         }
         url += qparams.join('&');
-        myLogger.info("==> GET " + url);
+        myLogger.debug("==> GET " + url);
         var resp = UrlFetchApp.fetch(url);
         var data = JSON.parse(resp.getContentText());
         if (data.error) {
@@ -292,7 +292,7 @@ var SlackChannelHistoryLogger = (function () {
             if (readonly)
                 return null;
             sheet = spreadsheet.insertSheet();
-            sheet.setColumnWidth(COL_LOG_TEXT, 480);
+            sheet.setColumnWidth(COL_LOG_TEXT, 800);
         }
         var sheetName = this.sheetName(ch);
         if (sheet.getName() !== sheetName) {

@@ -415,7 +415,7 @@ class SlackChannelHistoryLogger {
     if (!sheet) {
       if (readonly) return null;
       sheet = spreadsheet.insertSheet();
-      sheet.setColumnWidth(COL_LOG_TEXT, 480);
+      sheet.setColumnWidth(COL_LOG_TEXT, 800);
     }
 
     let sheetName = this.sheetName(ch);
