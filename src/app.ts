@@ -6,6 +6,10 @@ const COL_LOG_TEXT = 3;
 const COL_LOG_RAW_JSON = 4;
 const COL_MAX = COL_LOG_RAW_JSON;
 
+const FETCH_STATUS_START = "START";
+const FETCH_STATUS_ARCHIVED = "ARCHIVED";
+const FETCH_STATUS_END = "END";
+
 // Slack offers 10,000 history logs for free plan teams
 const MAX_HISTORY_PAGINATION = 10;
 const HISTORY_COUNT_PER_PAGE = 1000;
@@ -24,6 +28,14 @@ if (!APP_WORKSHEET_ID) {
 const LOG_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('log_folder_id');
 if (!LOG_FOLDER_ID) {
   throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
+}
+
+const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal"];
+
+var LOG_LEVEL:number = LOG_LEVELS.indexOf("info");
+var LOG_LEVEL_PROP = PropertiesService.getScriptProperties().getProperty('log_level');
+if (LOG_LEVELS.indexOf(LOG_LEVEL_PROP) >= 0) {
+  LOG_LEVEL = LOG_LEVELS.indexOf(LOG_LEVEL_PROP);
 }
 
 class SpreadsheetLogger {
@@ -50,12 +62,20 @@ class SpreadsheetLogger {
     return this.sh;
   }
 
-  log_(level: string, message: string) {
+  private log_(level: string, message: string) {
+    if(LOG_LEVELS.indexOf(level) < LOG_LEVEL) {
+      return;
+    }
+
     var sh = this.log_sheet_();
     var now = new Date();
     var last_row = sh.getLastRow();
     sh.insertRowAfter(last_row).getRange(last_row + 1, 1, 1, 3).setValues([[now, level, "'" + message]]);
     return sh;
+  }
+
+  trace(message: string) {
+    this.log_('trace', message);
   }
 
   debug(message: string) {
@@ -114,7 +134,7 @@ class SpreadsheetKeyValueStore {
   private getSheet() {
 
     if (this.sh == null) {
-      var sheet_name = 'status';
+      var sheet_name = 'keyValue';
       var ss = SpreadsheetApp.openById(this.id);
       var sh = ss.getSheetByName(sheet_name);
       if (sh == null) {
@@ -256,7 +276,7 @@ class SlackChannelHistoryLogger {
     }
     url += qparams.join('&');
 
-    myLogger.info(`==> GET ${url}`);
+    myLogger.debug(`==> GET ${url}`);
 
     let resp = UrlFetchApp.fetch(url);
     let data = <ISlackResponse>JSON.parse(resp.getContentText());
@@ -264,7 +284,7 @@ class SlackChannelHistoryLogger {
       throw `GET ${path}: ${data.error}`;
     }
 
-    myLogger.info(`<== GOT`);
+    myLogger.debug(`<== GOT`);
     return data;
   }
 
@@ -281,21 +301,20 @@ class SlackChannelHistoryLogger {
     this.teamName = teamInfoResp.team.name;
 
     let channelsResp = <ISlackChannelsListResponse>this.requestSlackAPI('channels.list');
+
+    const channelFetchTime = (ch: ISlackChannel) => {
+      var sheetName = this.sheetName(ch);
+      var status = keyValueStore.getStatus(sheetName);
+      var time = status.timestamp.getTime();
+      if (status.status != FETCH_STATUS_END) {
+        time = 0;
+      }
+      return time;
+    };
+
     channelsResp.channels.sort((ch1, ch2)=> {
-      var sheetName1 = this.sheetName(ch1);
-      var sheetName2 = this.sheetName(ch2);
-      var status1 = keyValueStore.getStatus(sheetName1);
-      var status2 = keyValueStore.getStatus(sheetName2);
-
-      var time1 = status1.timestamp.getTime();
-      if (status1.status != "END") {
-        time1 = 0;
-      }
-      var time2 = status2.timestamp.getTime();
-      if (status2.status != "END") {
-        time2 = 0;
-      }
-
+      var time1 = channelFetchTime(ch1);
+      var time2 = channelFetchTime(ch2);
       return time1 - time2;
     });
 
@@ -303,7 +322,7 @@ class SlackChannelHistoryLogger {
       this.importChannelHistoryDelta(ch);
       var endtime = +new Date();
       if (endtime - starttime > TRIGGER_LIMIT) {
-        myLogger.info(`TERMINATE by limit time ${endtime - starttime} > ${TRIGGER_LIMIT}`);
+        myLogger.warn(`TERMINATE by limit time ${endtime - starttime} > ${TRIGGER_LIMIT}`);
         break;
       }
 
@@ -412,11 +431,11 @@ class SlackChannelHistoryLogger {
     let sheetName = this.sheetName(ch);
     var prevStatus = keyValueStore.getStatus(sheetName);
 
-    if (prevStatus.status == "ARCHIVED") {
+    if (prevStatus.status == FETCH_STATUS_ARCHIVED) {
       return;
     }
 
-    keyValueStore.setStatus(sheetName, "START");
+    keyValueStore.setStatus(sheetName, FETCH_STATUS_START);
 
     let now = new Date();
     let oldest = '1'; // oldest=0 does not work
@@ -433,7 +452,7 @@ class SlackChannelHistoryLogger {
         let data = <ISlackMessage>JSON.parse(<string>existingSheet.getRange(lastRow, COL_LOG_RAW_JSON).getValue());
         oldest = data.ts;
       } catch (e) {
-        myLogger.info(`while trying to parse the latest history item from existing sheet: ${e}`)
+        myLogger.warn(`while trying to parse the latest history item from existing sheet: ${e}`)
       }
     }
 
@@ -481,9 +500,9 @@ class SlackChannelHistoryLogger {
       }
     }
     if (ch.is_archived) {
-      keyValueStore.setStatus(sheetName, "ARCHIVED");
+      keyValueStore.setStatus(sheetName, FETCH_STATUS_ARCHIVED);
     } else {
-      keyValueStore.setStatus(sheetName, "END");
+      keyValueStore.setStatus(sheetName, FETCH_STATUS_END);
     }
 
   }

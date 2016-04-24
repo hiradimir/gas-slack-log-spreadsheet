@@ -4,6 +4,9 @@ var COL_LOG_USER = 2;
 var COL_LOG_TEXT = 3;
 var COL_LOG_RAW_JSON = 4;
 var COL_MAX = COL_LOG_RAW_JSON;
+var FETCH_STATUS_START = "START";
+var FETCH_STATUS_ARCHIVED = "ARCHIVED";
+var FETCH_STATUS_END = "END";
 // Slack offers 10,000 history logs for free plan teams
 var MAX_HISTORY_PAGINATION = 10;
 var HISTORY_COUNT_PER_PAGE = 1000;
@@ -21,6 +24,12 @@ if (!APP_WORKSHEET_ID) {
 var LOG_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('log_folder_id');
 if (!LOG_FOLDER_ID) {
     throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
+}
+var LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal"];
+var LOG_LEVEL = LOG_LEVELS.indexOf("info");
+var LOG_LEVEL_PROP = PropertiesService.getScriptProperties().getProperty('log_level');
+if (LOG_LEVELS.indexOf(LOG_LEVEL_PROP) >= 0) {
+    LOG_LEVEL = LOG_LEVELS.indexOf(LOG_LEVEL_PROP);
 }
 var SpreadsheetLogger = (function () {
     function SpreadsheetLogger(id) {
@@ -43,11 +52,17 @@ var SpreadsheetLogger = (function () {
         return this.sh;
     };
     SpreadsheetLogger.prototype.log_ = function (level, message) {
+        if (LOG_LEVELS.indexOf(level) < LOG_LEVEL) {
+            return;
+        }
         var sh = this.log_sheet_();
         var now = new Date();
         var last_row = sh.getLastRow();
         sh.insertRowAfter(last_row).getRange(last_row + 1, 1, 1, 3).setValues([[now, level, "'" + message]]);
         return sh;
+    };
+    SpreadsheetLogger.prototype.trace = function (message) {
+        this.log_('trace', message);
     };
     SpreadsheetLogger.prototype.debug = function (message) {
         this.log_('debug', message);
@@ -96,7 +111,7 @@ var SpreadsheetKeyValueStore = (function () {
     };
     SpreadsheetKeyValueStore.prototype.getSheet = function () {
         if (this.sh == null) {
-            var sheet_name = 'status';
+            var sheet_name = 'keyValue';
             var ss = SpreadsheetApp.openById(this.id);
             var sh = ss.getSheetByName(sheet_name);
             if (sh == null) {
@@ -161,7 +176,7 @@ var SlackChannelHistoryLogger = (function () {
         if (data.error) {
             throw "GET " + path + ": " + data.error;
         }
-        myLogger.info("<== GOT");
+        myLogger.debug("<== GOT");
         return data;
     };
     SlackChannelHistoryLogger.prototype.run = function () {
@@ -175,19 +190,18 @@ var SlackChannelHistoryLogger = (function () {
         var teamInfoResp = this.requestSlackAPI('team.info');
         this.teamName = teamInfoResp.team.name;
         var channelsResp = this.requestSlackAPI('channels.list');
+        var channelFetchTime = function (ch) {
+            var sheetName = _this.sheetName(ch);
+            var status = keyValueStore.getStatus(sheetName);
+            var time = status.timestamp.getTime();
+            if (status.status != FETCH_STATUS_END) {
+                time = 0;
+            }
+            return time;
+        };
         channelsResp.channels.sort(function (ch1, ch2) {
-            var sheetName1 = _this.sheetName(ch1);
-            var sheetName2 = _this.sheetName(ch2);
-            var status1 = keyValueStore.getStatus(sheetName1);
-            var status2 = keyValueStore.getStatus(sheetName2);
-            var time1 = status1.timestamp.getTime();
-            if (status1.status != "END") {
-                time1 = 0;
-            }
-            var time2 = status2.timestamp.getTime();
-            if (status2.status != "END") {
-                time2 = 0;
-            }
+            var time1 = channelFetchTime(ch1);
+            var time2 = channelFetchTime(ch2);
             return time1 - time2;
         });
         for (var _i = 0, _a = channelsResp.channels; _i < _a.length; _i++) {
@@ -195,7 +209,7 @@ var SlackChannelHistoryLogger = (function () {
             this.importChannelHistoryDelta(ch);
             var endtime = +new Date();
             if (endtime - starttime > TRIGGER_LIMIT) {
-                myLogger.info("TERMINATE by limit time " + (endtime - starttime) + " > " + TRIGGER_LIMIT);
+                myLogger.warn("TERMINATE by limit time " + (endtime - starttime) + " > " + TRIGGER_LIMIT);
                 break;
             }
         }
@@ -291,10 +305,10 @@ var SlackChannelHistoryLogger = (function () {
         myLogger.info("importChannelHistoryDelta " + ch.name + " (" + ch.id + ")");
         var sheetName = this.sheetName(ch);
         var prevStatus = keyValueStore.getStatus(sheetName);
-        if (prevStatus.status == "ARCHIVED") {
+        if (prevStatus.status == FETCH_STATUS_ARCHIVED) {
             return;
         }
-        keyValueStore.setStatus(sheetName, "START");
+        keyValueStore.setStatus(sheetName, FETCH_STATUS_START);
         var now = new Date();
         var oldest = '1'; // oldest=0 does not work
         var existingSheet = this.getSheet(ch, now, true);
@@ -310,7 +324,7 @@ var SlackChannelHistoryLogger = (function () {
                 oldest = data.ts;
             }
             catch (e) {
-                myLogger.info("while trying to parse the latest history item from existing sheet: " + e);
+                myLogger.warn("while trying to parse the latest history item from existing sheet: " + e);
             }
         }
         var messages = this.loadMessagesBulk(ch, { oldest: oldest });
@@ -354,10 +368,10 @@ var SlackChannelHistoryLogger = (function () {
             }
         }
         if (ch.is_archived) {
-            keyValueStore.setStatus(sheetName, "ARCHIVED");
+            keyValueStore.setStatus(sheetName, FETCH_STATUS_ARCHIVED);
         }
         else {
-            keyValueStore.setStatus(sheetName, "END");
+            keyValueStore.setStatus(sheetName, FETCH_STATUS_END);
         }
     };
     SlackChannelHistoryLogger.prototype.formatDate = function (dt) {
