@@ -30,6 +30,11 @@ if (!LOG_FOLDER_ID) {
   throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
 }
 
+const PG_LOG_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('pg_log_folder_id');
+if (!PG_LOG_FOLDER_ID) {
+  throw 'You should set "pg_log_folder_id" property from [File] > [Project properties] > [Script properties]';
+}
+
 const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal"];
 
 var LOG_LEVEL:number = LOG_LEVELS.indexOf("info");
@@ -245,7 +250,9 @@ interface ISlackTeamInfoResponse extends ISlackResponse {
 }
 
 function StoreLogsDelta() {
-  let logger = new SlackChannelHistoryLogger();
+  // let logger = new SlackChannelHistoryLogger();
+  let logger = new SlackGroupsHistoryLogger();
+
   myLogger.info("Start logger.run");
   logger.run();
   myLogger.info("End   logger.run");
@@ -258,13 +265,19 @@ interface ISpreadsheetInfo {
 ;
 
 
-class SlackChannelHistoryLogger {
+class SlackHistoryLogger {
+
+  private target: string;
+  private logFolderId: string;
+
   memberNames: { [id: string]: string } = {};
 
   cachedSpreadSheet: { [id: string]: GoogleAppsScript.Spreadsheet.Spreadsheet } = {};
   cachedSheet: { [id: string]: {[id: string]: GoogleAppsScript.Spreadsheet.Sheet} } = {};
 
-  constructor() {
+  constructor(target: string = "abstract", logFolderId: string = "abstract") {
+    this.target = target;
+    this.logFolderId = logFolderId;
   }
 
   requestSlackAPI(path: string, params: { [key: string]: any } = {}): ISlackResponse {
@@ -287,6 +300,15 @@ class SlackChannelHistoryLogger {
     return data;
   }
 
+  historyTargetList (){
+    let channelsResp = <ISlackChannelsListResponse>this.requestSlackAPI(`${this.target}.list`);
+    return channelsResp;
+  }
+  historyFetch (options: { [key: string]: string|number }){
+    let resp = <ISlackChannelsHistoryResponse>this.requestSlackAPI(`${this.target}.history`, options);
+    return resp;
+  }
+
   run() {
     //時刻格納用の変数
     var starttime = +new Date();
@@ -296,7 +318,7 @@ class SlackChannelHistoryLogger {
       this.memberNames[member.id] = member.name;
     });
 
-    let channelsResp = <ISlackChannelsListResponse>this.requestSlackAPI('channels.list');
+    let channelsResp = this.historyTargetList();
 
     const channelFetchTime = (ch: ISlackChannel) => {
       var sheetName = this.sheetName(ch);
@@ -308,13 +330,15 @@ class SlackChannelHistoryLogger {
       return time;
     };
 
-    channelsResp.channels.sort((ch1, ch2)=> {
+    let channels = <ISlackChannel[]>(<any>channelsResp)[this.target];
+
+    channels.sort((ch1, ch2)=> {
       var time1 = channelFetchTime(ch1);
       var time2 = channelFetchTime(ch2);
       return time1 - time2;
     });
 
-    for (let ch of channelsResp.channels) {
+    for (let ch of channels) {
       this.importChannelHistoryDelta(ch);
       var endtime = +new Date();
       if (endtime - starttime > TRIGGER_LIMIT) {
@@ -330,7 +354,7 @@ class SlackChannelHistoryLogger {
   getLogsFolder(): GoogleAppsScript.Drive.Folder {
 
     if (!this.cachedFolder) {
-      let folder = DriveApp.getFolderById(LOG_FOLDER_ID);
+      let folder = DriveApp.getFolderById(this.logFolderId);
       if (!folder) {
         throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
       }
@@ -411,6 +435,8 @@ class SlackChannelHistoryLogger {
     if (!sheet) {
       if (readonly) return null;
       sheet = spreadsheet.insertSheet();
+      sheet.setColumnWidth(COL_LOG_TIMESTAMP, 250);
+      sheet.setColumnWidth(COL_LOG_USER, 250);
       sheet.setColumnWidth(COL_LOG_TEXT, 800);
     }
 
@@ -521,7 +547,7 @@ class SlackChannelHistoryLogger {
         options['oldest'] = oldest;
       }
       // order: recent-to-older
-      let resp = <ISlackChannelsHistoryResponse>this.requestSlackAPI('channels.history', options);
+      let resp = this.historyFetch(options);
       messages = resp.messages.concat(messages);
       return resp;
     }
@@ -548,5 +574,19 @@ class SlackChannelHistoryLogger {
         let name = this.memberNames[userID];
         return name ? `@${name}` : $0;
       });
+  }
+}
+
+class SlackChannelHistoryLogger extends SlackHistoryLogger {
+
+  constructor(){
+    super("channels", LOG_FOLDER_ID)
+  }
+}
+
+class SlackGroupsHistoryLogger extends SlackHistoryLogger {
+
+  constructor(){
+    super("groups", PG_LOG_FOLDER_ID)
   }
 }

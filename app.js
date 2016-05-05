@@ -1,3 +1,8 @@
+var __extends = (this && this.__extends) || function (d, b) {
+    for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p];
+    function __() { this.constructor = d; }
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+};
 /**** Do not edit below unless you know what you are doing ****/
 var COL_LOG_TIMESTAMP = 1;
 var COL_LOG_USER = 2;
@@ -24,6 +29,10 @@ if (!APP_WORKSHEET_ID) {
 var LOG_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('log_folder_id');
 if (!LOG_FOLDER_ID) {
     throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
+}
+var PG_LOG_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('pg_log_folder_id');
+if (!PG_LOG_FOLDER_ID) {
+    throw 'You should set "pg_log_folder_id" property from [File] > [Project properties] > [Script properties]';
 }
 var LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal"];
 var LOG_LEVEL = LOG_LEVELS.indexOf("info");
@@ -150,19 +159,24 @@ var SpreadsheetKeyValueStore = (function () {
 }());
 var keyValueStore = new SpreadsheetKeyValueStore(APP_WORKSHEET_ID);
 function StoreLogsDelta() {
-    var logger = new SlackChannelHistoryLogger();
+    // let logger = new SlackChannelHistoryLogger();
+    var logger = new SlackGroupsHistoryLogger();
     myLogger.info("Start logger.run");
     logger.run();
     myLogger.info("End   logger.run");
 }
 ;
-var SlackChannelHistoryLogger = (function () {
-    function SlackChannelHistoryLogger() {
+var SlackHistoryLogger = (function () {
+    function SlackHistoryLogger(target, logFolderId) {
+        if (target === void 0) { target = "abstract"; }
+        if (logFolderId === void 0) { logFolderId = "abstract"; }
         this.memberNames = {};
         this.cachedSpreadSheet = {};
         this.cachedSheet = {};
+        this.target = target;
+        this.logFolderId = logFolderId;
     }
-    SlackChannelHistoryLogger.prototype.requestSlackAPI = function (path, params) {
+    SlackHistoryLogger.prototype.requestSlackAPI = function (path, params) {
         if (params === void 0) { params = {}; }
         var url = "https://slack.com/api/" + path + "?";
         var qparams = [("token=" + encodeURIComponent(API_TOKEN))];
@@ -179,7 +193,15 @@ var SlackChannelHistoryLogger = (function () {
         myLogger.debug("<== GOT");
         return data;
     };
-    SlackChannelHistoryLogger.prototype.run = function () {
+    SlackHistoryLogger.prototype.historyTargetList = function () {
+        var channelsResp = this.requestSlackAPI(this.target + ".list");
+        return channelsResp;
+    };
+    SlackHistoryLogger.prototype.historyFetch = function (options) {
+        var resp = this.requestSlackAPI(this.target + ".history", options);
+        return resp;
+    };
+    SlackHistoryLogger.prototype.run = function () {
         var _this = this;
         //時刻格納用の変数
         var starttime = +new Date();
@@ -187,7 +209,7 @@ var SlackChannelHistoryLogger = (function () {
         usersResp.members.forEach(function (member) {
             _this.memberNames[member.id] = member.name;
         });
-        var channelsResp = this.requestSlackAPI('channels.list');
+        var channelsResp = this.historyTargetList();
         var channelFetchTime = function (ch) {
             var sheetName = _this.sheetName(ch);
             var status = keyValueStore.getStatus(sheetName);
@@ -197,13 +219,14 @@ var SlackChannelHistoryLogger = (function () {
             }
             return time;
         };
-        channelsResp.channels.sort(function (ch1, ch2) {
+        var channels = channelsResp[this.target];
+        channels.sort(function (ch1, ch2) {
             var time1 = channelFetchTime(ch1);
             var time2 = channelFetchTime(ch2);
             return time1 - time2;
         });
-        for (var _i = 0, _a = channelsResp.channels; _i < _a.length; _i++) {
-            var ch = _a[_i];
+        for (var _i = 0, channels_1 = channels; _i < channels_1.length; _i++) {
+            var ch = channels_1[_i];
             this.importChannelHistoryDelta(ch);
             var endtime = +new Date();
             if (endtime - starttime > TRIGGER_LIMIT) {
@@ -212,9 +235,9 @@ var SlackChannelHistoryLogger = (function () {
             }
         }
     };
-    SlackChannelHistoryLogger.prototype.getLogsFolder = function () {
+    SlackHistoryLogger.prototype.getLogsFolder = function () {
         if (!this.cachedFolder) {
-            var folder = DriveApp.getFolderById(LOG_FOLDER_ID);
+            var folder = DriveApp.getFolderById(this.logFolderId);
             if (!folder) {
                 throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
             }
@@ -222,7 +245,7 @@ var SlackChannelHistoryLogger = (function () {
         }
         return this.cachedFolder;
     };
-    SlackChannelHistoryLogger.prototype.getSpreadSheet = function (ch, d, readonly) {
+    SlackHistoryLogger.prototype.getSpreadSheet = function (ch, d, readonly) {
         if (readonly === void 0) { readonly = false; }
         var dateString;
         if (d instanceof Date) {
@@ -252,11 +275,11 @@ var SlackChannelHistoryLogger = (function () {
         }
         return spreadsheet;
     };
-    SlackChannelHistoryLogger.prototype.sheetName = function (ch) {
+    SlackHistoryLogger.prototype.sheetName = function (ch) {
         var sheetName = ch.name + " (" + ch.id + ")";
         return sheetName;
     };
-    SlackChannelHistoryLogger.prototype.getSheet = function (ch, d, readonly) {
+    SlackHistoryLogger.prototype.getSheet = function (ch, d, readonly) {
         if (readonly === void 0) { readonly = false; }
         var spreadsheet = this.getSpreadSheet(ch, d, readonly);
         if (!spreadsheet) {
@@ -290,6 +313,8 @@ var SlackChannelHistoryLogger = (function () {
             if (readonly)
                 return null;
             sheet = spreadsheet.insertSheet();
+            sheet.setColumnWidth(COL_LOG_TIMESTAMP, 250);
+            sheet.setColumnWidth(COL_LOG_USER, 250);
             sheet.setColumnWidth(COL_LOG_TEXT, 800);
         }
         var sheetName = this.sheetName(ch);
@@ -298,7 +323,7 @@ var SlackChannelHistoryLogger = (function () {
         }
         return sheet;
     };
-    SlackChannelHistoryLogger.prototype.importChannelHistoryDelta = function (ch) {
+    SlackHistoryLogger.prototype.importChannelHistoryDelta = function (ch) {
         var _this = this;
         myLogger.info("importChannelHistoryDelta " + ch.name + " (" + ch.id + ")");
         var sheetName = this.sheetName(ch);
@@ -372,10 +397,10 @@ var SlackChannelHistoryLogger = (function () {
             keyValueStore.setStatus(sheetName, FETCH_STATUS_END);
         }
     };
-    SlackChannelHistoryLogger.prototype.formatDate = function (dt) {
+    SlackHistoryLogger.prototype.formatDate = function (dt) {
         return Utilities.formatDate(dt, Session.getScriptTimeZone(), 'yyyy-MM');
     };
-    SlackChannelHistoryLogger.prototype.loadMessagesBulk = function (ch, options) {
+    SlackHistoryLogger.prototype.loadMessagesBulk = function (ch, options) {
         var _this = this;
         if (options === void 0) { options = {}; }
         var messages = [];
@@ -390,7 +415,7 @@ var SlackChannelHistoryLogger = (function () {
                 options['oldest'] = oldest;
             }
             // order: recent-to-older
-            var resp = _this.requestSlackAPI('channels.history', options);
+            var resp = _this.historyFetch(options);
             messages = resp.messages.concat(messages);
             return resp;
         };
@@ -404,7 +429,7 @@ var SlackChannelHistoryLogger = (function () {
         // oldest-to-recent
         return messages.reverse();
     };
-    SlackChannelHistoryLogger.prototype.unescapeMessageText = function (text) {
+    SlackHistoryLogger.prototype.unescapeMessageText = function (text) {
         var _this = this;
         return (text || '')
             .replace(/&lt;/g, '<')
@@ -416,5 +441,19 @@ var SlackChannelHistoryLogger = (function () {
             return name ? "@" + name : $0;
         });
     };
-    return SlackChannelHistoryLogger;
+    return SlackHistoryLogger;
 }());
+var SlackChannelHistoryLogger = (function (_super) {
+    __extends(SlackChannelHistoryLogger, _super);
+    function SlackChannelHistoryLogger() {
+        _super.call(this, "channels", LOG_FOLDER_ID);
+    }
+    return SlackChannelHistoryLogger;
+}(SlackHistoryLogger));
+var SlackGroupsHistoryLogger = (function (_super) {
+    __extends(SlackGroupsHistoryLogger, _super);
+    function SlackGroupsHistoryLogger() {
+        _super.call(this, "groups", PG_LOG_FOLDER_ID);
+    }
+    return SlackGroupsHistoryLogger;
+}(SlackHistoryLogger));
