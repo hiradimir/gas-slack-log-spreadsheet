@@ -249,13 +249,20 @@ interface ISlackTeamInfoResponse extends ISlackResponse {
   };
 }
 
-function StoreLogsDelta() {
-  // let logger = new SlackChannelHistoryLogger();
+function StoreChannelLogsDelta() {
+  let logger = new SlackChannelHistoryLogger();
+
+  myLogger.info("Start StoreChannelLogsDelta logger.run");
+  logger.run();
+  myLogger.info("End StoreChannelLogsDelta logger.run");
+}
+
+function StoreGroupLogsDelta() {
   let logger = new SlackGroupsHistoryLogger();
 
-  myLogger.info("Start logger.run");
+  myLogger.info("Start StoreGroupLogsDelta logger.run");
   logger.run();
-  myLogger.info("End   logger.run");
+  myLogger.info("End StoreGroupLogsDelta logger.run");
 }
 
 interface ISpreadsheetInfo {
@@ -364,17 +371,21 @@ class SlackHistoryLogger {
     return this.cachedFolder;
   }
 
-  getSpreadSheet(ch: ISlackChannel, d: Date|string, readonly: boolean = false): GoogleAppsScript.Spreadsheet.Spreadsheet {
+  convertSpreadSheetName(ch: ISlackChannel, d: Date|string) {
     let dateString: string;
     if (d instanceof Date) {
       dateString = this.formatDate(d);
     } else {
       dateString = '' + d;
     }
+    return dateString;
+  }
+
+  getSpreadSheet(ch: ISlackChannel, d: Date|string, readonly: boolean = false): GoogleAppsScript.Spreadsheet.Spreadsheet {
 
     let spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet;
 
-    let spreadsheetName = dateString;
+    let spreadsheetName = this.convertSpreadSheetName(ch, d);
 
     if (this.cachedSpreadSheet[spreadsheetName]) {
       spreadsheet = this.cachedSpreadSheet[spreadsheetName];
@@ -390,6 +401,7 @@ class SlackHistoryLogger {
         spreadsheet = SpreadsheetApp.create(spreadsheetName);
         folder.addFile(DriveApp.getFileById(spreadsheet.getId()));
       }
+      this.cachedSpreadSheet[spreadsheetName] = spreadsheet;
     }
 
     return spreadsheet;
@@ -407,42 +419,47 @@ class SlackHistoryLogger {
       return null;
     }
 
-    let dateString: string;
-    if (d instanceof Date) {
-      dateString = this.formatDate(d);
-    } else {
-      dateString = '' + d;
-    }
+    let spreadSheetName = this.convertSpreadSheetName(ch, d);
 
     let sheetByID: { [id: string]: GoogleAppsScript.Spreadsheet.Sheet };
 
-    if (this.cachedSheet[dateString]) {
-      sheetByID = this.cachedSheet[dateString];
+    let initialSheet: GoogleAppsScript.Spreadsheet.Sheet;
+
+    if (this.cachedSheet[spreadSheetName]) {
+      sheetByID = this.cachedSheet[spreadSheetName];
     } else {
       sheetByID = {};
 
       let sheets = spreadsheet.getSheets();
       sheets.forEach((s: GoogleAppsScript.Spreadsheet.Sheet) => {
         let name = s.getName();
+        if (name === "シート1") {
+          initialSheet = s;
+        }
         let m = /^(.+) \((.+)\)$/.exec(name); // eg. "general (C123456)"
         if (!m) return;
         sheetByID[m[2]] = s;
       });
-      this.cachedSheet[dateString] = sheetByID;
+      this.cachedSheet[spreadSheetName] = sheetByID;
     }
 
+    let sheetName = this.sheetName(ch);
     let sheet = sheetByID[ch.id];
     if (!sheet) {
       if (readonly) return null;
       sheet = spreadsheet.insertSheet();
-      sheet.setColumnWidth(COL_LOG_TIMESTAMP, 250);
-      sheet.setColumnWidth(COL_LOG_USER, 250);
+      sheet.setColumnWidth(COL_LOG_TIMESTAMP, 150);
+      sheet.setColumnWidth(COL_LOG_USER, 150);
       sheet.setColumnWidth(COL_LOG_TEXT, 800);
-    }
 
-    let sheetName = this.sheetName(ch);
-    if (sheet.getName() !== sheetName) {
-      sheet.setName(sheetName);
+      if (initialSheet) {
+        spreadsheet.deleteSheet(initialSheet);
+      }
+
+      if (sheet.getName() !== sheetName) {
+        sheet.setName(sheetName);
+      }
+      sheetByID[ch.id] = sheet;
     }
 
     return sheet;
@@ -582,11 +599,17 @@ class SlackChannelHistoryLogger extends SlackHistoryLogger {
   constructor(){
     super("channels", LOG_FOLDER_ID)
   }
+  convertSpreadSheetName(ch: ISlackChannel, d: Date|string) {
+    return this.sheetName(ch);
+  }
 }
 
 class SlackGroupsHistoryLogger extends SlackHistoryLogger {
 
   constructor(){
     super("groups", PG_LOG_FOLDER_ID)
+  }
+  convertSpreadSheetName(ch: ISlackChannel, d: Date|string) {
+    return this.sheetName(ch);
   }
 }
