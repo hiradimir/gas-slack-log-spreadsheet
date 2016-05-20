@@ -390,8 +390,8 @@ var SlackHistoryLogger = (function () {
                 var date = new Date(+msg.ts * 1000);
                 return [
                     Utilities.formatDate(date, timezone, 'yyyy-MM-dd HH:mm:ss'),
-                    _this.memberNames[msg.user] || msg.username,
-                    _this.unescapeMessageText(msg.text),
+                    _this.memberNames[msg.user] || msg.username || msg.bot_id,
+                    _this.unescapeMessageText(msg.text) + _this.parseAttachements(msg.attachments),
                     JSON.stringify(msg)
                 ];
             });
@@ -439,6 +439,17 @@ var SlackHistoryLogger = (function () {
         }
         // oldest-to-recent
         return messages.reverse();
+    };
+    SlackHistoryLogger.prototype.parseAttachements = function (attachments) {
+        var _this = this;
+        if (attachments === void 0) { attachments = []; }
+        return attachments.map(function (attachment) {
+            var pretext = "";
+            if (attachment.pretext) {
+                pretext = attachment.pretext + "\n";
+            }
+            return pretext + _this.unescapeMessageText(attachment.text);
+        }).join("\n");
     };
     SlackHistoryLogger.prototype.unescapeMessageText = function (text) {
         var _this = this;

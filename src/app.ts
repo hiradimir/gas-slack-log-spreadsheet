@@ -218,6 +218,14 @@ interface ISlackChannel {
   // ...and more fields
 }
 
+interface ISlackAttachmentMessage {
+  fallback?: string;
+  pretext?: string;
+  text?: string;
+  id?: string;
+  color?: string;
+}
+
 // https://api.slack.com/events/message
 interface ISlackMessage {
   type: string;
@@ -227,6 +235,9 @@ interface ISlackMessage {
 
   // https://api.slack.com/events/message/bot_message
   username?: string;
+  bot_id?: string;
+  subtype?: string;
+  attachments?: ISlackAttachmentMessage[];
 
   // ...and more fields
 }
@@ -527,10 +538,11 @@ class SlackHistoryLogger {
         let date = new Date(+msg.ts * 1000);
         return [
           Utilities.formatDate(date, timezone, 'yyyy-MM-dd HH:mm:ss'),
-          this.memberNames[msg.user] || msg.username,
-          this.unescapeMessageText(msg.text),
+          this.memberNames[msg.user] || msg.username || msg.bot_id,
+          this.unescapeMessageText(msg.text) + this.parseAttachements(msg.attachments),
           JSON.stringify(msg)
         ]
+
       });
       if (rows.length > 0) {
         let range = sheet.insertRowsAfter(lastRow || 1, rows.length)
@@ -579,6 +591,16 @@ class SlackHistoryLogger {
 
     // oldest-to-recent
     return messages.reverse();
+  }
+
+  parseAttachements(attachments: ISlackAttachmentMessage[] = []): string {
+    return attachments.map((attachment)=>{
+      var pretext = "";
+      if(attachment.pretext) {
+        pretext = attachment.pretext + "\n";
+      }
+      return pretext + this.unescapeMessageText(attachment.text);
+    }).join("\n");
   }
 
   unescapeMessageText(text?: string): string {
