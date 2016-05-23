@@ -712,4 +712,5 @@ function doGet(request:{parameters:any} = {parameters:{}}) {
   }
 
   myLogger.info("End doGet");
+  return ContentService.createTextOutput("OK");
 }

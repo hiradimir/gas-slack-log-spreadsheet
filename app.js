@@ -548,4 +548,5 @@ function doGet(request) {
         StoreSlackUserList();
     }
     myLogger.info("End doGet");
+    return ContentService.createTextOutput("OK");
 }
