@@ -25,6 +25,12 @@ const APP_WORKSHEET_ID = PropertiesService.getScriptProperties().getProperty('ap
 if (!APP_WORKSHEET_ID) {
   throw 'You should set "app_worksheet_id" property from [File] > [Project properties] > [Script properties]';
 }
+
+const SLACK_USER_MAIL_LIST = PropertiesService.getScriptProperties().getProperty('slack_user_worksheet_id');
+if (!SLACK_USER_MAIL_LIST) {
+  throw 'You should set "slack_user_worksheet_id" property from [File] > [Project properties] > [Script properties]';
+}
+
 const LOG_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('log_folder_id');
 if (!LOG_FOLDER_ID) {
   throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
@@ -107,30 +113,30 @@ class SpreadsheetLogger {
 
 const myLogger: SpreadsheetLogger = new SpreadsheetLogger(APP_WORKSHEET_ID);
 
-class ChannelLogStatus {
-  constructor(public key: string, public timestamp: Date, public status: string) {
+class KeyValueStoreObject {
+  constructor(public key: string, public timestamp: Date, public value: string) {
   }
 
   toObjectArray(): Object[] {
-    return [this.key, this.timestamp, this.status]
+    return [this.key, this.timestamp, this.value]
   }
 }
 
 class SpreadsheetKeyValueStore {
 
-  constructor(public id: string) {
+  constructor(public id: string, public sheet_name: string = 'keyValue') {
     this.init();
   }
 
   sh: GoogleAppsScript.Spreadsheet.Sheet;
 
-  keyStatusMap: {[key: string]: {index: number, values?: ChannelLogStatus}} = {};
+  keyStatusMap: {[key: string]: {index: number, values?: KeyValueStoreObject}} = {};
 
   private init() {
     var sh = this.getSheet();
     var values: Object[][] = sh.getSheetValues(1, 1, sh.getMaxRows() - 1, sh.getMaxColumns());
     values.forEach((v, i) => {
-      var status = new ChannelLogStatus(<string>v[0], <Date>v[1], <string>v[2]);
+      var status = new KeyValueStoreObject(<string>v[0], <Date>v[1], <string>v[2]);
       this.keyStatusMap[status.key] = {index: i + 1, values: status};
     });
     return sh;
@@ -139,7 +145,7 @@ class SpreadsheetKeyValueStore {
   private getSheet() {
 
     if (this.sh == null) {
-      var sheet_name = 'keyValue';
+      var sheet_name = this.sheet_name;
       var ss = SpreadsheetApp.openById(this.id);
       var sh = ss.getSheetByName(sheet_name);
       if (sh == null) {
@@ -160,7 +166,7 @@ class SpreadsheetKeyValueStore {
     return last_row + 1;
   }
 
-  setStatus(key: string, status: string) {
+  setValue(key: string, status: string) {
     if (!this.keyStatusMap[key]) {
       this.newRow(key);
     }
@@ -168,20 +174,21 @@ class SpreadsheetKeyValueStore {
     var sh = this.getSheet();
 
     var now = new Date();
-    keyInfo.values = new ChannelLogStatus(key, now, status);
+    keyInfo.values = new KeyValueStoreObject(key, now, status);
     sh.getRange(keyInfo.index, 1, 1, 3).setValues([keyInfo.values.toObjectArray()]).clearFormat();
   }
 
-  getStatus(key: string): ChannelLogStatus {
+  getValue(key: string): KeyValueStoreObject {
     if (this.keyStatusMap[key]) {
       return this.keyStatusMap[key].values;
     }
-    return new ChannelLogStatus(key, new Date(1), "");
+    return new KeyValueStoreObject(key, new Date(1), "");
   }
 }
 
 const keyValueStore = new SpreadsheetKeyValueStore(APP_WORKSHEET_ID);
 
+const slackUserListStore = new SpreadsheetKeyValueStore(SLACK_USER_MAIL_LIST, "SlackUserList");
 
 interface ISlackResponse {
   ok: boolean;
@@ -243,9 +250,20 @@ interface ISlackMessage {
 }
 
 // https://api.slack.com/types/user
+interface ISlackUserProfile {
+  first_name: string;
+  last_name: string;
+  real_name: string;
+  email: string;
+
+  // ...and more fields
+}
+
+// https://api.slack.com/types/user
 interface ISlackUser {
   id: string;
   name: string;
+  profile: ISlackUserProfile;
 
   // ...and more fields
 }
@@ -334,15 +352,21 @@ class SlackHistoryLogger {
     let usersResp = <ISlackUsersListResponse>this.requestSlackAPI('users.list');
     usersResp.members.forEach((member) => {
       this.memberNames[member.id] = member.name;
+
+      var prevEmail = slackUserListStore.getValue(member.name).value;
+      if (member.profile.email && prevEmail !== member.profile.email) {
+        slackUserListStore.setValue( "'" + member.name, "'" + member.profile.email);
+      }
+
     });
 
     let channelsResp = this.historyTargetList();
 
     const channelFetchTime = (ch: ISlackChannel) => {
       var sheetName = this.sheetName(ch);
-      var status = keyValueStore.getStatus(sheetName);
+      var status = keyValueStore.getValue(sheetName);
       var time = status.timestamp.getTime();
-      if (status.status != FETCH_STATUS_END) {
+      if (status.value != FETCH_STATUS_END) {
         time = 0;
       }
       return time;
@@ -479,13 +503,13 @@ class SlackHistoryLogger {
   importChannelHistoryDelta(ch: ISlackChannel) {
     myLogger.info(`importChannelHistoryDelta ${ch.name} (${ch.id})`);
     let sheetName = this.sheetName(ch);
-    var prevStatus = keyValueStore.getStatus(sheetName);
+    var prevStatus = keyValueStore.getValue(sheetName);
 
-    if (prevStatus.status == FETCH_STATUS_ARCHIVED) {
+    if (prevStatus.value == FETCH_STATUS_ARCHIVED) {
       return;
     }
 
-    keyValueStore.setStatus(sheetName, FETCH_STATUS_START);
+    keyValueStore.setValue(sheetName, FETCH_STATUS_START);
 
     let now = new Date();
     let oldest = '1'; // oldest=0 does not work
@@ -551,9 +575,9 @@ class SlackHistoryLogger {
       }
     }
     if (ch.is_archived) {
-      keyValueStore.setStatus(sheetName, FETCH_STATUS_ARCHIVED);
+      keyValueStore.setValue(sheetName, FETCH_STATUS_ARCHIVED);
     } else {
-      keyValueStore.setStatus(sheetName, FETCH_STATUS_END);
+      keyValueStore.setValue(sheetName, FETCH_STATUS_END);
     }
 
   }

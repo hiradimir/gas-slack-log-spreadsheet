@@ -26,6 +26,10 @@ var APP_WORKSHEET_ID = PropertiesService.getScriptProperties().getProperty('app_
 if (!APP_WORKSHEET_ID) {
     throw 'You should set "app_worksheet_id" property from [File] > [Project properties] > [Script properties]';
 }
+var SLACK_USER_MAIL_LIST = PropertiesService.getScriptProperties().getProperty('slack_user_worksheet_id');
+if (!SLACK_USER_MAIL_LIST) {
+    throw 'You should set "slack_user_worksheet_id" property from [File] > [Project properties] > [Script properties]';
+}
 var LOG_FOLDER_ID = PropertiesService.getScriptProperties().getProperty('log_folder_id');
 if (!LOG_FOLDER_ID) {
     throw 'You should set "log_folder_id" property from [File] > [Project properties] > [Script properties]';
@@ -91,20 +95,22 @@ var SpreadsheetLogger = (function () {
     return SpreadsheetLogger;
 }());
 var myLogger = new SpreadsheetLogger(APP_WORKSHEET_ID);
-var ChannelLogStatus = (function () {
-    function ChannelLogStatus(key, timestamp, status) {
+var KeyValueStoreObject = (function () {
+    function KeyValueStoreObject(key, timestamp, value) {
         this.key = key;
         this.timestamp = timestamp;
-        this.status = status;
+        this.value = value;
     }
-    ChannelLogStatus.prototype.toObjectArray = function () {
-        return [this.key, this.timestamp, this.status];
+    KeyValueStoreObject.prototype.toObjectArray = function () {
+        return [this.key, this.timestamp, this.value];
     };
-    return ChannelLogStatus;
+    return KeyValueStoreObject;
 }());
 var SpreadsheetKeyValueStore = (function () {
-    function SpreadsheetKeyValueStore(id) {
+    function SpreadsheetKeyValueStore(id, sheet_name) {
+        if (sheet_name === void 0) { sheet_name = 'keyValue'; }
         this.id = id;
+        this.sheet_name = sheet_name;
         this.keyStatusMap = {};
         this.init();
     }
@@ -113,14 +119,14 @@ var SpreadsheetKeyValueStore = (function () {
         var sh = this.getSheet();
         var values = sh.getSheetValues(1, 1, sh.getMaxRows() - 1, sh.getMaxColumns());
         values.forEach(function (v, i) {
-            var status = new ChannelLogStatus(v[0], v[1], v[2]);
+            var status = new KeyValueStoreObject(v[0], v[1], v[2]);
             _this.keyStatusMap[status.key] = { index: i + 1, values: status };
         });
         return sh;
     };
     SpreadsheetKeyValueStore.prototype.getSheet = function () {
         if (this.sh == null) {
-            var sheet_name = 'keyValue';
+            var sheet_name = this.sheet_name;
             var ss = SpreadsheetApp.openById(this.id);
             var sh = ss.getSheetByName(sheet_name);
             if (sh == null) {
@@ -139,25 +145,26 @@ var SpreadsheetKeyValueStore = (function () {
         this.keyStatusMap[key] = { index: last_row + 1, values: null };
         return last_row + 1;
     };
-    SpreadsheetKeyValueStore.prototype.setStatus = function (key, status) {
+    SpreadsheetKeyValueStore.prototype.setValue = function (key, status) {
         if (!this.keyStatusMap[key]) {
             this.newRow(key);
         }
         var keyInfo = this.keyStatusMap[key];
         var sh = this.getSheet();
         var now = new Date();
-        keyInfo.values = new ChannelLogStatus(key, now, status);
+        keyInfo.values = new KeyValueStoreObject(key, now, status);
         sh.getRange(keyInfo.index, 1, 1, 3).setValues([keyInfo.values.toObjectArray()]).clearFormat();
     };
-    SpreadsheetKeyValueStore.prototype.getStatus = function (key) {
+    SpreadsheetKeyValueStore.prototype.getValue = function (key) {
         if (this.keyStatusMap[key]) {
             return this.keyStatusMap[key].values;
         }
-        return new ChannelLogStatus(key, new Date(1), "");
+        return new KeyValueStoreObject(key, new Date(1), "");
     };
     return SpreadsheetKeyValueStore;
 }());
 var keyValueStore = new SpreadsheetKeyValueStore(APP_WORKSHEET_ID);
+var slackUserListStore = new SpreadsheetKeyValueStore(SLACK_USER_MAIL_LIST, "SlackUserList");
 function StoreChannelLogsDelta() {
     var logger = new SlackChannelHistoryLogger();
     myLogger.info("Start StoreChannelLogsDelta logger.run");
@@ -213,13 +220,17 @@ var SlackHistoryLogger = (function () {
         var usersResp = this.requestSlackAPI('users.list');
         usersResp.members.forEach(function (member) {
             _this.memberNames[member.id] = member.name;
+            var prevEmail = slackUserListStore.getValue(member.name).value;
+            if (member.profile.email && prevEmail !== member.profile.email) {
+                slackUserListStore.setValue("'" + member.name, "'" + member.profile.email);
+            }
         });
         var channelsResp = this.historyTargetList();
         var channelFetchTime = function (ch) {
             var sheetName = _this.sheetName(ch);
-            var status = keyValueStore.getStatus(sheetName);
+            var status = keyValueStore.getValue(sheetName);
             var time = status.timestamp.getTime();
-            if (status.status != FETCH_STATUS_END) {
+            if (status.value != FETCH_STATUS_END) {
                 time = 0;
             }
             return time;
@@ -338,11 +349,11 @@ var SlackHistoryLogger = (function () {
         var _this = this;
         myLogger.info("importChannelHistoryDelta " + ch.name + " (" + ch.id + ")");
         var sheetName = this.sheetName(ch);
-        var prevStatus = keyValueStore.getStatus(sheetName);
-        if (prevStatus.status == FETCH_STATUS_ARCHIVED) {
+        var prevStatus = keyValueStore.getValue(sheetName);
+        if (prevStatus.value == FETCH_STATUS_ARCHIVED) {
             return;
         }
-        keyValueStore.setStatus(sheetName, FETCH_STATUS_START);
+        keyValueStore.setValue(sheetName, FETCH_STATUS_START);
         var now = new Date();
         var oldest = '1'; // oldest=0 does not work
         var existingSheet = this.getSheet(ch, now, true);
@@ -402,10 +413,10 @@ var SlackHistoryLogger = (function () {
             }
         }
         if (ch.is_archived) {
-            keyValueStore.setStatus(sheetName, FETCH_STATUS_ARCHIVED);
+            keyValueStore.setValue(sheetName, FETCH_STATUS_ARCHIVED);
         }
         else {
-            keyValueStore.setStatus(sheetName, FETCH_STATUS_END);
+            keyValueStore.setValue(sheetName, FETCH_STATUS_END);
         }
     };
     SlackHistoryLogger.prototype.formatDate = function (dt) {
