@@ -10,6 +10,10 @@ const FETCH_STATUS_START = "START";
 const FETCH_STATUS_ARCHIVED = "ARCHIVED";
 const FETCH_STATUS_END = "END";
 
+const LOGGING_WORK_STATUS = "logging work status";
+const WORK_STATUS_CHANNEL = "Channel";
+const WORK_STATUS_PRIVATEGROUP = "Private Group";
+
 // Slack offers 10,000 history logs for free plan teams
 const MAX_HISTORY_PAGINATION = 10;
 const HISTORY_COUNT_PER_PAGE = 1000;
@@ -188,7 +192,6 @@ class SpreadsheetKeyValueStore {
 
 const keyValueStore = new SpreadsheetKeyValueStore(APP_WORKSHEET_ID);
 
-const slackUserListStore = new SpreadsheetKeyValueStore(SLACK_USER_MAIL_LIST, "SlackUserList");
 
 interface ISlackResponse {
   ok: boolean;
@@ -278,22 +281,6 @@ interface ISlackTeamInfoResponse extends ISlackResponse {
   };
 }
 
-function StoreChannelLogsDelta() {
-  let logger = new SlackChannelHistoryLogger();
-
-  myLogger.info("Start StoreChannelLogsDelta logger.run");
-  logger.run();
-  myLogger.info("End StoreChannelLogsDelta logger.run");
-}
-
-function StoreGroupLogsDelta() {
-  let logger = new SlackGroupsHistoryLogger();
-
-  myLogger.info("Start StoreGroupLogsDelta logger.run");
-  logger.run();
-  myLogger.info("End StoreGroupLogsDelta logger.run");
-}
-
 interface ISpreadsheetInfo {
   spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet;
   sheets: { [ id: string ]: GoogleAppsScript.Spreadsheet.Sheet; };
@@ -301,20 +288,7 @@ interface ISpreadsheetInfo {
 ;
 
 
-class SlackHistoryLogger {
-
-  private target: string;
-  private logFolderId: string;
-
-  memberNames: { [id: string]: string } = {};
-
-  cachedSpreadSheet: { [id: string]: GoogleAppsScript.Spreadsheet.Spreadsheet } = {};
-  cachedSheet: { [id: string]: {[id: string]: GoogleAppsScript.Spreadsheet.Sheet} } = {};
-
-  constructor(target: string = "abstract", logFolderId: string = "abstract") {
-    this.target = target;
-    this.logFolderId = logFolderId;
-  }
+class SlackClient {
 
   requestSlackAPI(path: string, params: { [key: string]: any } = {}): ISlackResponse {
     let url = `https://slack.com/api/${path}?`;
@@ -336,6 +310,45 @@ class SlackHistoryLogger {
     return data;
   }
 
+}
+
+class SlackUserListWriter extends SlackClient {
+  slackUserListStore: SpreadsheetKeyValueStore;
+
+  constructor(){
+    super();
+    this.slackUserListStore = new SpreadsheetKeyValueStore(SLACK_USER_MAIL_LIST, "SlackUserList");
+  }
+
+  run() {
+
+    let usersResp = <ISlackUsersListResponse>this.requestSlackAPI('users.list');
+    usersResp.members.forEach((member) => {
+      var prevEmail = this.slackUserListStore.getValue(member.name).value;
+      if (member.profile.email && prevEmail !== member.profile.email) {
+        this.slackUserListStore.setValue( "'" + member.name, "'" + member.profile.email);
+      }
+    });
+
+  }
+}
+
+class SlackHistoryLogger extends SlackClient {
+
+  private target: string;
+  private logFolderId: string;
+
+  memberNames: { [id: string]: string } = {};
+
+  cachedSpreadSheet: { [id: string]: GoogleAppsScript.Spreadsheet.Spreadsheet } = {};
+  cachedSheet: { [id: string]: {[id: string]: GoogleAppsScript.Spreadsheet.Sheet} } = {};
+
+  constructor(target: string = "abstract", logFolderId: string = "abstract") {
+    super();
+    this.target = target;
+    this.logFolderId = logFolderId;
+  }
+
   historyTargetList (){
     let channelsResp = <ISlackChannelsListResponse>this.requestSlackAPI(`${this.target}.list`);
     return channelsResp;
@@ -352,12 +365,6 @@ class SlackHistoryLogger {
     let usersResp = <ISlackUsersListResponse>this.requestSlackAPI('users.list');
     usersResp.members.forEach((member) => {
       this.memberNames[member.id] = member.name;
-
-      var prevEmail = slackUserListStore.getValue(member.name).value;
-      if (member.profile.email && prevEmail !== member.profile.email) {
-        slackUserListStore.setValue( "'" + member.name, "'" + member.profile.email);
-      }
-
     });
 
     let channelsResp = this.historyTargetList();
@@ -658,4 +665,51 @@ class SlackGroupsHistoryLogger extends SlackHistoryLogger {
   convertSpreadSheetName(ch: ISlackChannel, d: Date|string) {
     return this.sheetName(ch);
   }
+}
+
+function StoreSlackUserList() {
+  myLogger.info("Start StoreSlackUserList writer.run");
+  let writer = new SlackUserListWriter();
+  writer.run();
+  myLogger.info("End StoreSlackUserList writer.run");
+}
+
+function StoreChannelLogsDelta() {
+  myLogger.info("Start StoreChannelLogsDelta logger.run");
+  let logger = new SlackChannelHistoryLogger();
+  logger.run();
+  myLogger.info("End StoreChannelLogsDelta logger.run");
+}
+
+function StoreGroupLogsDelta() {
+  myLogger.info("Start StoreGroupLogsDelta logger.run");
+  let logger = new SlackGroupsHistoryLogger();
+  logger.run();
+  myLogger.info("End StoreGroupLogsDelta logger.run");
+}
+
+function StoreLogsDelta() {
+  myLogger.debug("Start StoreLogsDelta");
+  const prevWorkStatus = keyValueStore.getValue(LOGGING_WORK_STATUS).value;
+
+  if (prevWorkStatus === WORK_STATUS_CHANNEL){
+    keyValueStore.setValue(LOGGING_WORK_STATUS, WORK_STATUS_PRIVATEGROUP);
+    StoreGroupLogsDelta();
+  } else {
+    keyValueStore.setValue(LOGGING_WORK_STATUS, WORK_STATUS_CHANNEL);
+    StoreChannelLogsDelta();
+  }
+  myLogger.debug("End StoreLogsDelta");
+}
+
+function doGet(request:{parameters:any} = {parameters:{}}) {
+  myLogger.info("Start doGet");
+
+  if (request.parameters.logging){
+    StoreLogsDelta();
+  } else {
+    StoreSlackUserList();
+  }
+
+  myLogger.info("End doGet");
 }
