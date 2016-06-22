@@ -17,8 +17,8 @@ const WORK_STATUS_PRIVATEGROUP = "Private Group";
 // Slack offers 10,000 history logs for free plan teams
 const MAX_HISTORY_PAGINATION = 10;
 const HISTORY_COUNT_PER_PAGE = 1000;
-// 4分をリミットとする
-const TRIGGER_LIMIT = 4 * (60 * 1000);
+// 1分をリミットとする
+const TRIGGER_LIMIT = 1 * (60 * 1000);
 
 // Configuration: Obtain Slack web API token at https://api.slack.com/web
 const API_TOKEN = PropertiesService.getScriptProperties().getProperty('slack_api_token');
@@ -500,6 +500,14 @@ class SlackHistoryLogger extends SlackClient {
 
       if (sheet.getName() !== sheetName) {
         sheet.setName(sheetName);
+
+        var protection = sheet.protect().setDescription("Sheet Protection");
+        var me = Session.getEffectiveUser();
+        protection.addEditor(me);
+        protection.removeEditors(<any>protection.getEditors());
+        if (protection.canDomainEdit()) {
+          protection.setDomainEdit(false);
+        }
       }
       sheetByID[ch.id] = sheet;
     }
@@ -579,6 +587,7 @@ class SlackHistoryLogger extends SlackClient {
         let range = sheet.insertRowsAfter(lastRow || 1, rows.length)
           .getRange(lastRow + 1, 1, rows.length, COL_MAX);
         range.setValues(rows);
+        sheet.getRange("C:C").setWrap(true);
       }
     }
     if (ch.is_archived) {

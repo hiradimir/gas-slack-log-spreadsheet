@@ -18,8 +18,8 @@ var WORK_STATUS_PRIVATEGROUP = "Private Group";
 // Slack offers 10,000 history logs for free plan teams
 var MAX_HISTORY_PAGINATION = 10;
 var HISTORY_COUNT_PER_PAGE = 1000;
-// 4分をリミットとする
-var TRIGGER_LIMIT = 4 * (60 * 1000);
+// 1分をリミットとする
+var TRIGGER_LIMIT = 1 * (60 * 1000);
 // Configuration: Obtain Slack web API token at https://api.slack.com/web
 var API_TOKEN = PropertiesService.getScriptProperties().getProperty('slack_api_token');
 if (!API_TOKEN) {
@@ -351,6 +351,13 @@ var SlackHistoryLogger = (function (_super) {
             }
             if (sheet.getName() !== sheetName) {
                 sheet.setName(sheetName);
+                var protection = sheet.protect().setDescription("Sheet Protection");
+                var me = Session.getEffectiveUser();
+                protection.addEditor(me);
+                protection.removeEditors(protection.getEditors());
+                if (protection.canDomainEdit()) {
+                    protection.setDomainEdit(false);
+                }
             }
             sheetByID[ch.id] = sheet;
         }
@@ -421,6 +428,7 @@ var SlackHistoryLogger = (function (_super) {
                 var range = sheet.insertRowsAfter(lastRow || 1, rows.length)
                     .getRange(lastRow + 1, 1, rows.length, COL_MAX);
                 range.setValues(rows);
+                sheet.getRange("C:C").setWrap(true);
             }
         }
         if (ch.is_archived) {
